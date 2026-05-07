@@ -402,6 +402,11 @@ class SipUserAgent {
     final offer = parseSdp(ctx.lastInvite.body);
     final remoteAudio = offer.audio;
     final remoteVideo = offer.video;
+    if (remoteAudio != null) {
+      ctx.negotiatedAudioCodec = remoteAudio.codec;
+      ctx.negotiatedDtmfPt = remoteAudio.telephoneEventPt;
+      ctx.negotiatedDtmfRange = remoteAudio.telephoneEventRange;
+    }
 
     VideoSession? video;
     int? videoPort;
@@ -599,6 +604,11 @@ class SipUserAgent {
           final answer = parseSdp(msg.body);
           final remoteAudio = answer.audio;
           final remoteVideo = answer.video;
+          if (remoteAudio != null) {
+            ctx.negotiatedAudioCodec = remoteAudio.codec;
+            ctx.negotiatedDtmfPt = remoteAudio.telephoneEventPt;
+            ctx.negotiatedDtmfRange = remoteAudio.telephoneEventRange;
+          }
           final media = ctx.media;
           if (media != null && remoteAudio != null) {
             media.start(remoteAudio.toEndpoint()).catchError((e) {
@@ -736,7 +746,9 @@ class SipUserAgent {
           200,
           'OK',
           addToTag: existing.localTag,
-          sdp: acc == null ? null : _buildOfferSdpForCall(existing, acc),
+          sdp: acc == null
+              ? null
+              : _buildAnswerSdpForCall(existing, acc, offered),
           extra: extra,
         ),
       );
@@ -1321,6 +1333,66 @@ class SipUserAgent {
     );
   }
 
+  /// Build the SDP body for a 200 OK to a peer-sent (re-)INVITE.
+  ///
+  /// RFC 3264 \u00a78: a re-INVITE answer must stay within what was already
+  /// negotiated; it is **not** a fresh offer. We pick the codec from the
+  /// new offer if it intersects with the previously-agreed codec, else
+  /// fall back to the new offer's first codec, else fall back to the
+  /// cached one. The bound RTP port and direction (hold/active) come from
+  /// the call context, same as outbound offers.
+  String _buildAnswerSdpForCall(
+    _CallContext ctx,
+    SipAccount acc,
+    SdpAudio? newOffer,
+  ) {
+    final media = ctx.media;
+    final port = media?.localPort ?? 0;
+    final rtcp = media?.localRtcpPort;
+    final direction = ctx.held ? SdpDirection.sendonly : SdpDirection.sendrecv;
+
+    SdpAudio? answerOffer = newOffer;
+    if (answerOffer == null && ctx.negotiatedAudioCodec != null) {
+      // Re-INVITE without an offer body: synthesise one from cached state
+      // so the answer stays consistent with the original negotiation.
+      answerOffer = SdpAudio(
+        host: _mediaLocalHost(),
+        port: port,
+        codec: ctx.negotiatedAudioCodec!,
+        telephoneEventPt: ctx.negotiatedDtmfPt,
+        telephoneEventRange: ctx.negotiatedDtmfRange,
+      );
+    }
+    if (answerOffer == null) {
+      // No offer and nothing cached \u2014 must be the very first response and
+      // we have no codec context. Fall back to a full G.711 offer so the
+      // call doesn't stall, even though strictly this isn't an answer.
+      return buildG711Offer(
+        username: acc.username,
+        localHost: _mediaLocalHost(),
+        localPort: port,
+        rtcpPort: rtcp,
+        direction: direction,
+        sessionId: ctx.sdpSessionId,
+        sessionVersion: ctx.bumpSdpVersion(),
+      );
+    }
+    // Update cached negotiation so subsequent re-INVITEs stay in sync.
+    ctx.negotiatedAudioCodec = answerOffer.codec;
+    ctx.negotiatedDtmfPt = answerOffer.telephoneEventPt;
+    ctx.negotiatedDtmfRange = answerOffer.telephoneEventRange;
+    return buildG711Answer(
+      username: acc.username,
+      localHost: _mediaLocalHost(),
+      localPort: port,
+      remoteOffer: answerOffer,
+      rtcpPort: rtcp,
+      direction: direction,
+      sessionId: ctx.sdpSessionId,
+      sessionVersion: ctx.bumpSdpVersion(),
+    );
+  }
+
   /// Best-effort "public" host to put in `c=` / `o=`. Prefers an explicit
   /// override; otherwise the SIP transport's local host. Refuses to emit
   /// `0.0.0.0` / `::` which most SBCs interpret as hold-equivalent —
@@ -1445,6 +1517,15 @@ class _CallContext {
   /// True once a hold re-INVITE has been sent and 200-OK confirmed (or
   /// optimistically, while the re-INVITE is in flight).
   bool held = false;
+
+  /// Codec we agreed to use after the initial offer/answer. Used when a
+  /// peer-initiated re-INVITE arrives so we re-emit an answer that's a
+  /// strict intersection (RFC 3264 §8) instead of a fresh full menu.
+  G711Variant? negotiatedAudioCodec;
+
+  /// Telephone-event PT and fmtp range carried alongside [negotiatedAudioCodec].
+  int? negotiatedDtmfPt;
+  String? negotiatedDtmfRange;
 
   // RFC 4028 state.
   int? proposedSE;
