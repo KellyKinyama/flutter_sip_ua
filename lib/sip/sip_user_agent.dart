@@ -110,15 +110,25 @@ class SipTextMessage {
 }
 
 class SipUserAgent {
-  SipUserAgent({Random? rng, AudioSink Function()? audioSinkFactory})
-    : _rng = rng ?? Random.secure(),
-      _digest = DigestClient(),
-      _audioSinkFactory = audioSinkFactory;
+  SipUserAgent({
+    Random? rng,
+    AudioSink Function()? audioSinkFactory,
+    String? publicMediaAddress,
+  }) : _rng = rng ?? Random.secure(),
+       _digest = DigestClient(),
+       _audioSinkFactory = audioSinkFactory,
+       _publicMediaAddress = publicMediaAddress;
 
   final Random _rng;
   final DigestClient _digest;
   final AudioSink Function()? _audioSinkFactory;
   final _uuid = const Uuid();
+
+  /// Optional override for the host advertised in `c=` / `o=` of every
+  /// SDP we emit. Useful when this client sits behind NAT or in a
+  /// container where the socket-local IP isn't reachable by the peer.
+  /// When null, falls back to the SIP transport's local host.
+  final String? _publicMediaAddress;
 
   /// Optional sink that records every wire-format SIP message to disk.
   /// Set with [attachFileLogger] before calling [start] for full coverage.
@@ -237,17 +247,24 @@ class SipUserAgent {
       videoPort = await video.bindLocalPort();
     }
 
+    final sdpSid = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final body = video == null
         ? buildG711Offer(
             username: acc.username,
             localHost: _mediaLocalHost(),
             localPort: rtpPort,
+            rtcpPort: media.localRtcpPort,
+            sessionId: sdpSid,
+            sessionVersion: sdpSid,
           )
         : buildAvOffer(
             username: acc.username,
             localHost: _mediaLocalHost(),
             audioPort: rtpPort,
             videoPort: videoPort,
+            audioRtcpPort: media.localRtcpPort,
+            sessionId: sdpSid,
+            sessionVersion: sdpSid,
           );
 
     final extra = <String, String>{
@@ -284,6 +301,7 @@ class SipUserAgent {
       branch: branch,
       proposedSE: acc.sessionExpires,
       minSE: acc.minSE,
+      sdpSessionId: sdpSid,
     );
     ctx.media = media;
     ctx.video = video;
@@ -394,20 +412,38 @@ class SipUserAgent {
     }
 
     final answerSdp = video == null
-        ? buildG711Offer(
-            username: acc.username,
-            localHost: _mediaLocalHost(),
-            localPort: rtpPort,
-            preferred: remoteAudio?.codec ?? G711Variant.pcmu,
-          )
+        ? (remoteAudio == null
+              ? buildG711Offer(
+                  username: acc.username,
+                  localHost: _mediaLocalHost(),
+                  localPort: rtpPort,
+                  rtcpPort: media.localRtcpPort,
+                  sessionId: ctx.sdpSessionId,
+                  sessionVersion: ctx.bumpSdpVersion(),
+                )
+              : buildG711Answer(
+                  username: acc.username,
+                  localHost: _mediaLocalHost(),
+                  localPort: rtpPort,
+                  remoteOffer: remoteAudio,
+                  rtcpPort: media.localRtcpPort,
+                  sessionId: ctx.sdpSessionId,
+                  sessionVersion: ctx.bumpSdpVersion(),
+                ))
         : buildAvOffer(
             username: acc.username,
             localHost: _mediaLocalHost(),
             audioPort: rtpPort,
             videoPort: videoPort,
+            audioRtcpPort: media.localRtcpPort,
             audioPreferred: remoteAudio?.codec ?? G711Variant.pcmu,
+            audioSecond: null,
+            telephoneEventPt: remoteAudio?.telephoneEventPt,
+            telephoneEventRange: remoteAudio?.telephoneEventRange ?? '0-15',
             videoPayloadType: remoteVideo!.payloadType,
             videoCodec: remoteVideo.codec,
+            sessionId: ctx.sdpSessionId,
+            sessionVersion: ctx.bumpSdpVersion(),
           );
 
     // RFC 4028: if the peer asked for timers, accept and choose refresher.
@@ -1280,16 +1316,29 @@ class SipUserAgent {
       localPort: port,
       rtcpPort: rtcp,
       direction: ctx.held ? SdpDirection.sendonly : SdpDirection.sendrecv,
+      sessionId: ctx.sdpSessionId,
+      sessionVersion: ctx.bumpSdpVersion(),
     );
   }
 
-  /// Best-effort "public" host to put in `c=` / `o=`. Falls back to the
-  /// SIP transport's local host if it isn't 0.0.0.0.
+  /// Best-effort "public" host to put in `c=` / `o=`. Prefers an explicit
+  /// override; otherwise the SIP transport's local host. Refuses to emit
+  /// `0.0.0.0` / `::` which most SBCs interpret as hold-equivalent —
+  /// falls back to loopback in that case so the call at least connects on
+  /// a single host while the operator notices the warning.
   String _mediaLocalHost() {
+    final override = _publicMediaAddress?.trim();
+    if (override != null && override.isNotEmpty) return override;
     final tx = _transport;
-    if (tx == null) return '0.0.0.0';
+    if (tx == null) return '127.0.0.1';
     final h = tx.localHost;
-    if (h.isEmpty || h == '0.0.0.0' || h == '::') return '0.0.0.0';
+    if (h.isEmpty || h == '0.0.0.0' || h == '::') {
+      _log(
+        'sdp: transport local host is unspecified ($h); '
+        'falling back to 127.0.0.1 — set publicMediaAddress for real deployments',
+      );
+      return '127.0.0.1';
+    }
     return h;
   }
 
@@ -1360,7 +1409,11 @@ class _CallContext {
     required this.branch,
     this.proposedSE,
     this.minSE,
-  });
+    int? sdpSessionId,
+  }) : sdpSessionId =
+           sdpSessionId ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+       sdpVersion =
+           sdpSessionId ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
   final SipCall call;
   final String localTag;
@@ -1370,6 +1423,16 @@ class _CallContext {
   String branch;
   SipMessage lastInvite;
   int authAttempts = 0;
+
+  /// Stable `o=` session id for the lifetime of this dialog (RFC 4566 §5.2).
+  final int sdpSessionId;
+
+  /// Monotonically incremented `o=` version. Bump via [bumpSdpVersion]
+  /// before every outgoing offer/answer that re-describes the session.
+  int sdpVersion;
+
+  /// Returns the new version after incrementing.
+  int bumpSdpVersion() => ++sdpVersion;
 
   /// Active media plane (mic capture + RTP socket). Null until the call is
   /// being set up, and again once it ends.
