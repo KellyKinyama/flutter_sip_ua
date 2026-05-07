@@ -17,30 +17,24 @@ class SipFileLogger {
   final String path;
 
   IOSink? _sink;
-  bool _opening = false;
 
-  /// Open (or create) the file in append mode. Safe to call more than once.
-  Future<void> open() async {
-    if (_sink != null || _opening) return;
-    _opening = true;
-    try {
-      final f = File(path);
-      await f.parent.create(recursive: true);
-      _sink = f.openWrite(mode: FileMode.append);
-      _sink!
-        ..writeln()
-        ..writeln(
-          '################################################################',
-        )
-        ..writeln('# session start  ${DateTime.now().toIso8601String()}')
-        ..writeln('# pid            $pid')
-        ..writeln(
-          '################################################################',
-        );
-      await _sink!.flush();
-    } finally {
-      _opening = false;
-    }
+  /// Open (or create) the file in append mode. Synchronous so it's ready
+  /// before any SIP traffic flows. Safe to call more than once.
+  void open() {
+    if (_sink != null) return;
+    final f = File(path);
+    f.parent.createSync(recursive: true);
+    _sink = f.openWrite(mode: FileMode.append);
+    _sink!
+      ..writeln()
+      ..writeln(
+        '################################################################',
+      )
+      ..writeln('# session start  ${DateTime.now().toIso8601String()}')
+      ..writeln('# pid            $pid')
+      ..writeln(
+        '################################################################',
+      );
   }
 
   /// Log a parsed message we just sent (`OUT`) or received (`IN`).

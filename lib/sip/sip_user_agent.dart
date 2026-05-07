@@ -155,6 +155,12 @@ class SipUserAgent {
   RegistrationState get registrationState => _regState;
   SipAccount? get account => _account;
 
+  /// Snapshot of the call with [callId], or `null` if no such call is
+  /// active. Lets the UI seed itself synchronously instead of waiting for
+  /// the next [callStream] emission (which broadcast semantics don't
+  /// replay).
+  SipCall? callById(String callId) => _calls[callId]?.call;
+
   /// Attach a wire-format file logger. Every subsequent inbound/outbound
   /// SIP message is written to [logger]'s file verbatim.
   void attachFileLogger(SipFileLogger logger) {

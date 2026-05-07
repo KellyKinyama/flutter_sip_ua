@@ -27,20 +27,19 @@ class _FlutterSipUaAppState extends State<FlutterSipUaApp> {
   @override
   void initState() {
     super.initState();
-    // Best-effort: open the on-disk SIP wire dump and attach it to the UA.
-    // Failures (e.g. unwritable temp dir) are swallowed — the in-memory log
-    // panel still works.
-    () async {
-      try {
-        await _fileLogger.open();
-        _ua.attachFileLogger(_fileLogger);
-        // ignore: avoid_print
-        print('[sip] wire log: ${_fileLogger.path}');
-      } catch (e) {
-        // ignore: avoid_print
-        print('[sip] could not open wire log: $e');
-      }
-    }();
+    // Synchronously open the wire dump and attach it BEFORE the home page
+    // restores the saved account (and triggers ua.start). Otherwise the
+    // first REGISTER + transport state events race the attach and never
+    // make it to disk.
+    try {
+      _fileLogger.open();
+      _ua.attachFileLogger(_fileLogger);
+      // ignore: avoid_print
+      print('[sip] wire log: ${_fileLogger.path}');
+    } catch (e) {
+      // ignore: avoid_print
+      print('[sip] could not open wire log: $e');
+    }
   }
 
   static String _buildLogPath() {
