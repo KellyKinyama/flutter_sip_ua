@@ -81,16 +81,30 @@ const int _dtmfTickSamples = 160; // one G.711 frame == 20 ms
 
 final Random _rng = Random.secure();
 
+/// Direction tag for [RtpPacketTap].
+enum RtpFlow { rtpOut, rtpIn, rtcpOut, rtcpIn }
+
+/// Diagnostic callback invoked once per RTP / RTCP datagram. Called with a
+/// human-readable one-line dump (header fields, length — never the
+/// payload bytes themselves) so the host can write to a log file.
+typedef RtpPacketTap = void Function(RtpFlow flow, String summary);
+
 class MediaSession {
   MediaSession({
     String? cname,
     AudioSink? sink,
     int jitterTargetFrames = 3,
     int jitterMaxFrames = 12,
+    RtpPacketTap? packetTap,
+    int packetTapHead = 5,
+    int packetTapEvery = 250,
   }) : cname = cname ?? _defaultCname(),
        _sink = sink ?? const NullAudioSink(),
        _jitterTargetFrames = jitterTargetFrames,
-       _jitterMaxFrames = jitterMaxFrames;
+       _jitterMaxFrames = jitterMaxFrames,
+       _packetTap = packetTap,
+       _packetTapHead = packetTapHead,
+       _packetTapEvery = packetTapEvery;
 
   /// CNAME advertised in SDES. Stable for the life of this session.
   final String cname;
@@ -108,6 +122,10 @@ class MediaSession {
   int _rtpTimestamp = 0;
   int _captureSampleRate = 8000;
   Timer? _rtcpTimer;
+
+  /// Set true when the next outbound audio packet should carry the marker
+  /// bit (start of a talkspurt, RFC 3551 §4.1).
+  bool _markNextPacket = false;
 
   /// True once we've locked the remote RTP source/port from the first
   /// inbound packet (symmetric RTP, RFC 4961).
@@ -130,6 +148,18 @@ class MediaSession {
   final int _jitterMaxFrames;
   JitterBuffer? _jitter;
   Timer? _jitterTick;
+
+  /// Wire-level packet tap (optional). See [RtpPacketTap].
+  final RtpPacketTap? _packetTap;
+  final int _packetTapHead;
+  final int _packetTapEvery;
+  int _rtpOutCount = 0;
+  int _rtpInCount = 0;
+  int _rtcpOutCount = 0;
+  int _rtcpInCount = 0;
+
+  bool _shouldTap(int n, int head, int every) =>
+      n < head || (every > 0 && n % every == 0);
 
   /// Diagnostic snapshot of the current playout buffer.
   ({int buffered, int played, int lateDrops, int overflowDrops})
@@ -221,10 +251,18 @@ class MediaSession {
     _remoteRtcpAddr = _remoteAddr;
 
     _state = RtpState(
-      ssrc: DateTime.now().microsecondsSinceEpoch & 0xFFFFFFFF,
+      // RFC 3550 §8.1: SSRC must be random; §5.1: initial seq must be random
+      // (security recommendation — makes off-path injection harder).
+      ssrc: _rng.nextInt(0xFFFFFFFF),
       payloadType: _codec.payloadType,
+      initialSequenceNumber: _rng.nextInt(0xFFFF),
     );
-    _rtpTimestamp = DateTime.now().microsecondsSinceEpoch & 0xFFFFFFFF;
+    // RFC 3550 §5.1: initial RTP timestamp must also be random.
+    _rtpTimestamp = _rng.nextInt(0xFFFFFFFF);
+    // First audio packet of the session marks the start of a talkspurt
+    // (RFC 3551 §4.1). Reset on every start() so a re-INVITE that restarts
+    // media also re-marks.
+    _markNextPacket = true;
 
     // Spin up the playout buffer. Even with a NullAudioSink this gives
     // useful diagnostics via [jitterStats].
@@ -341,8 +379,15 @@ class MediaSession {
     if (state == null || socket == null || addr == null || remote == null) {
       return;
     }
-    final pkt = makeRtpPacket(state, payload, _rtpTimestamp & 0xFFFFFFFF);
+    final pkt = makeRtpPacket(
+      state,
+      payload,
+      _rtpTimestamp & 0xFFFFFFFF,
+      marker: _markNextPacket,
+    );
     socket.send(pkt, addr, remote.port);
+    _maybeTapOutbound(state, payload.length, marker: _markNextPacket);
+    _markNextPacket = false;
     stats.onSent(payload.length, _rtpTimestamp & 0xFFFFFFFF);
     _rtpTimestamp = (_rtpTimestamp + _g711FrameSamples) & 0xFFFFFFFF;
   }
@@ -380,6 +425,7 @@ class MediaSession {
     }
 
     stats.onReceived(pkt, _g711ClockRate);
+    _maybeTapInbound(pkt, dg.data.length);
     final variant = G711Variant.fromPayloadType(pkt.payloadType);
     if (variant == null) return; // ignore non-G.711 (e.g. DTMF telephone-event)
     final pcm = variant == G711Variant.pcmu
@@ -443,6 +489,7 @@ class MediaSession {
     final dg = s.receive();
     if (dg == null) return;
     final packets = parseRtcp(dg.data);
+    _maybeTapRtcpInbound(packets, dg.data.length);
     for (final p in packets) {
       if (p is RtcpSr) {
         final mid = ntpMiddle32(p.report.ntpSeconds, p.report.ntpFraction);
@@ -505,6 +552,11 @@ class MediaSession {
       ..setRange(0, head.length, head)
       ..setRange(head.length, head.length + sdes.length, sdes);
     rtcp.send(compound, addr, _remoteRtcpPort);
+    _maybeTapRtcpOutbound(
+      compound.length,
+      sender: stats.sentPackets > 0,
+      reportBlocks: reports.length,
+    );
   }
 
   void _sendRtcpBye() {
@@ -590,6 +642,86 @@ class MediaSession {
     // Advance audio timestamp by the DTMF duration so the next voice frame
     // lines up on the receiver's playout buffer.
     _rtpTimestamp = (_rtpTimestamp + ticks * _dtmfTickSamples) & 0xFFFFFFFF;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Packet tap (diagnostic logging)
+  // ---------------------------------------------------------------------------
+
+  void _maybeTapOutbound(
+    RtpState state,
+    int payloadLen, {
+    required bool marker,
+  }) {
+    final tap = _packetTap;
+    if (tap == null) return;
+    final n = _rtpOutCount++;
+    if (!_shouldTap(n, _packetTapHead, _packetTapEvery)) return;
+    // state.seq has already been incremented by makeRtpPacket; subtract 1
+    // to report the seq actually written on the wire.
+    final wireSeq = (state.seq - 1) & 0xFFFF;
+    tap(
+      RtpFlow.rtpOut,
+      'n=$n V=2 P=0 X=0 CC=0 M=${marker ? 1 : 0} '
+      'PT=${state.payloadType} seq=$wireSeq '
+      'ts=${(_rtpTimestamp & 0xFFFFFFFF).toRadixString(16)} '
+      'ssrc=0x${state.ssrc.toRadixString(16).padLeft(8, '0')} '
+      'payload=${payloadLen}B',
+    );
+  }
+
+  void _maybeTapInbound(RtpPacket pkt, int datagramLen) {
+    final tap = _packetTap;
+    if (tap == null) return;
+    final n = _rtpInCount++;
+    if (!_shouldTap(n, _packetTapHead, _packetTapEvery)) return;
+    tap(
+      RtpFlow.rtpIn,
+      'n=$n V=2 M=${pkt.marker ? 1 : 0} PT=${pkt.payloadType} '
+      'seq=${pkt.sequenceNumber} '
+      'ts=${pkt.timestamp.toRadixString(16)} '
+      'ssrc=0x${pkt.ssrc.toRadixString(16).padLeft(8, '0')} '
+      'datagram=${datagramLen}B payload=${pkt.payload.length}B',
+    );
+  }
+
+  void _maybeTapRtcpOutbound(
+    int byteLen, {
+    required bool sender,
+    required int reportBlocks,
+  }) {
+    final tap = _packetTap;
+    if (tap == null) return;
+    final n = _rtcpOutCount++;
+    tap(
+      RtpFlow.rtcpOut,
+      'n=$n compound=${sender ? 'SR' : 'RR'}+SDES '
+      'reports=$reportBlocks bytes=$byteLen '
+      'sentPkts=${stats.sentPackets} sentOctets=${stats.sentOctets}',
+    );
+  }
+
+  void _maybeTapRtcpInbound(List<RtcpPacket> packets, int byteLen) {
+    final tap = _packetTap;
+    if (tap == null) return;
+    final n = _rtcpInCount++;
+    final kinds = packets
+        .map((p) {
+          if (p is RtcpSr) {
+            final r = p.report;
+            return 'SR(ssrc=0x${r.ssrc.toRadixString(16)} '
+                'pkts=${r.packetCount} oct=${r.octetCount} reports=${r.reports.length})';
+          }
+          if (p is RtcpRr) {
+            final r = p.report;
+            return 'RR(ssrc=0x${r.ssrc.toRadixString(16)} reports=${r.reports.length})';
+          }
+          if (p is RtcpSdes) return 'SDES';
+          if (p is RtcpBye) return 'BYE(${p.bye.sources.length} src)';
+          return 'PT?';
+        })
+        .join(',');
+    tap(RtpFlow.rtcpIn, 'n=$n bytes=$byteLen [$kinds]');
   }
 
   static int _dtmfEvent(String digit) {

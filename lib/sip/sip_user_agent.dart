@@ -114,10 +114,12 @@ class SipUserAgent {
     Random? rng,
     AudioSink Function()? audioSinkFactory,
     String? publicMediaAddress,
+    RtpPacketTap? rtpPacketTap,
   }) : _rng = rng ?? Random.secure(),
        _digest = DigestClient(),
        _audioSinkFactory = audioSinkFactory,
-       _publicMediaAddress = publicMediaAddress;
+       _publicMediaAddress = publicMediaAddress,
+       _rtpPacketTap = rtpPacketTap;
 
   final Random _rng;
   final DigestClient _digest;
@@ -129,6 +131,9 @@ class SipUserAgent {
   /// container where the socket-local IP isn't reachable by the peer.
   /// When null, falls back to the SIP transport's local host.
   final String? _publicMediaAddress;
+
+  /// Optional RTP/RTCP packet tap. See [RtpPacketTap].
+  final RtpPacketTap? _rtpPacketTap;
 
   /// Optional sink that records every wire-format SIP message to disk.
   /// Set with [attachFileLogger] before calling [start] for full coverage.
@@ -237,7 +242,10 @@ class SipUserAgent {
     final cseq = _nextCseq();
 
     // Bind a local RTP port and put it in our SDP offer.
-    final media = MediaSession(sink: _audioSinkFactory?.call());
+    final media = MediaSession(
+      sink: _audioSinkFactory?.call(),
+      packetTap: _rtpPacketTap,
+    );
     final rtpPort = await media.bindLocalPort();
 
     VideoSession? video;
@@ -396,7 +404,10 @@ class SipUserAgent {
     if (acc == null) return;
 
     // Bind RTP socket and parse the peer's offer so we know where to send.
-    final media = MediaSession(sink: _audioSinkFactory?.call());
+    final media = MediaSession(
+      sink: _audioSinkFactory?.call(),
+      packetTap: _rtpPacketTap,
+    );
     final rtpPort = await media.bindLocalPort();
     ctx.media = media;
     final offer = parseSdp(ctx.lastInvite.body);
