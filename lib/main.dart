@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'sip/audio/media_session.dart';
+import 'sip/audio/pcm_audio_sink.dart';
 import 'sip/sip_file_logger.dart';
 import 'sip/sip_user_agent.dart';
 import 'ui/home_page.dart';
@@ -24,6 +24,7 @@ class FlutterSipUaApp extends StatefulWidget {
 class _FlutterSipUaAppState extends State<FlutterSipUaApp> {
   late final SipFileLogger _fileLogger = SipFileLogger(_buildLogPath());
   late final SipUserAgent _ua = SipUserAgent(
+    audioSinkFactory: () => PcmAudioSink(),
     rtpPacketTap: (flow, summary) {
       _fileLogger.note('rtp ${flow.name} $summary');
     },

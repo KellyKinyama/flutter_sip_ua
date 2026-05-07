@@ -2,15 +2,16 @@
 ///
 /// * Opens a UDP socket on an ephemeral local port (the RTP port that goes
 ///   into our SDP offer/answer).
-/// * Captures microphone audio via `mic_stream` (16-bit signed PCM).
+/// * Captures microphone audio via `record` (16-bit signed PCM,
+///   cross-platform: Windows / macOS / Linux / Android / iOS / Web).
 /// * Down-samples to 8 kHz mono if the device gave us a higher rate.
 /// * Encodes 20 ms frames (160 samples) with G.711 (μ-law or A-law).
 /// * Builds RTP packets via `rtp.dart` and sends them to the remote
 ///   IP/port learned from the peer's SDP.
 /// * Receives RTP and exposes a stream of decoded Int16 PCM frames so a
-///   future playback engine can render them. Playback itself is out of
-///   scope for this signalling-first UA — wire `incomingPcm` into your
-///   audio sink of choice (audio_streamer, flutter_pcm_sound, ...).
+///   future playback engine can render them. Playback itself is wired
+///   through the [AudioSink] passed in the constructor (defaults to
+///   [NullAudioSink], which discards everything — useful for tests).
 library;
 
 import 'dart:async';
@@ -18,8 +19,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:mic_stream/mic_stream.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 
 import 'audio_sink.dart';
 import 'g711.dart';
@@ -115,6 +115,7 @@ class MediaSession {
   InternetAddress? _remoteAddr;
   InternetAddress? _remoteRtcpAddr;
   RtpEndpoint? _remote;
+  AudioRecorder? _recorder;
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<RawSocketEvent>? _socketSub;
   RtpState? _state;
@@ -278,23 +279,45 @@ class MediaSession {
       (_) => _jitter?.tick(),
     );
 
-    // Permission gate.
-    final granted = await Permission.microphone.request();
-    if (!granted.isGranted) {
+    // Permission gate. `record` handles platform specifics for us.
+    final recorder = AudioRecorder();
+    _recorder = recorder;
+    if (!await recorder.hasPermission()) {
+      _packetTap?.call(
+        RtpFlow.rtpOut,
+        'mic ERROR: microphone permission denied',
+      );
       throw StateError('Microphone permission denied');
     }
 
     // Try to capture at 8 kHz directly; if the platform forces another
     // rate we'll downsample on the fly.
-    final stream = MicStream.microphone(
-      audioSource: AudioSource.DEFAULT,
-      sampleRate: _g711ClockRate,
-      channelConfig: ChannelConfig.CHANNEL_IN_MONO,
-      audioFormat: AudioFormat.ENCODING_PCM_16BIT,
+    Stream<Uint8List> stream;
+    try {
+      stream = await recorder.startStream(
+        const RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: _g711ClockRate,
+          numChannels: 1,
+        ),
+      );
+    } catch (e) {
+      _packetTap?.call(RtpFlow.rtpOut, 'mic ERROR: startStream failed: $e');
+      rethrow;
+    }
+    // record honours the requested rate when the platform supports it; if
+    // it falls back, our manual downsampler takes over.
+    _captureSampleRate = _g711ClockRate;
+    _packetTap?.call(
+      RtpFlow.rtpOut,
+      'mic START: requested ${_g711ClockRate}Hz mono pcm16',
     );
-    final actualRate = await MicStream.sampleRate;
-    _captureSampleRate = actualRate.toInt();
-    _micSub = stream.listen(_onMicChunk, onError: (_) {});
+    _micSub = stream.listen(
+      _onMicChunk,
+      onError: (Object e) {
+        _packetTap?.call(RtpFlow.rtpOut, 'mic ERROR: $e');
+      },
+    );
 
     // Schedule RTCP. Per RFC 3550 §6.3.2 the initial transmission is
     // randomized to half the deterministic interval so multiple endpoints
@@ -323,6 +346,19 @@ class MediaSession {
     }
     await _micSub?.cancel();
     _micSub = null;
+    final recorder = _recorder;
+    _recorder = null;
+    if (recorder != null) {
+      try {
+        await recorder.stop();
+      } catch (_) {}
+      try {
+        await recorder.dispose();
+      } catch (_) {}
+    }
+    try {
+      await _sink.close();
+    } catch (_) {}
 
     // Best-effort BYE before tearing down RTCP.
     try {
@@ -444,7 +480,7 @@ class MediaSession {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /// Treat raw little-endian PCM bytes from `mic_stream` as Int16.
+  /// Treat raw little-endian PCM bytes from `record` as Int16.
   static Int16List _bytesToInt16(Uint8List bytes) {
     final n = bytes.length & ~1; // drop trailing odd byte if any
     final out = Int16List(n ~/ 2);
