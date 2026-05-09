@@ -14,24 +14,43 @@ class AppTheme {
   static ThemeData dark() => _build(Brightness.dark);
 
   static ThemeData _build(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: brightness,
-    );
+    final isDark = brightness == Brightness.dark;
+    var scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
+    if (isDark) {
+      // Pin the dark surfaces to the exact greys from
+      // `phone.dark.css`, so the chrome reads as the BP softphone
+      // instead of Flutter's default purple-tinted dark surfaces.
+      //   body              #222222   (page)
+      //   .buddy:hover      #333333
+      //   .buddySelected    #404040
+      //   .streamSection    #292929
+      //   .callStatus       #333333
+      //   borders           #3e3e3e
+      //   text              #cccccc
+      scheme = scheme.copyWith(
+        surface: const Color(0xFF222222),
+        onSurface: const Color(0xFFCCCCCC),
+        surfaceContainerLowest: const Color(0xFF1B1B1B),
+        surfaceContainerLow: const Color(0xFF222222),
+        surfaceContainer: const Color(0xFF292929),
+        surfaceContainerHigh: const Color(0xFF333333),
+        surfaceContainerHighest: const Color(0xFF404040),
+        onSurfaceVariant: const Color(0xFF999999),
+        outline: const Color(0xFF3E3E3E),
+        outlineVariant: const Color(0xFF333333),
+      );
+    }
+
     final base = ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
       visualDensity: VisualDensity.standard,
       extensions: <ThemeExtension<dynamic>>[
-        brightness == Brightness.dark
-            ? BrowserPhoneColors.dark
-            : BrowserPhoneColors.light,
+        isDark ? BrowserPhoneColors.dark : BrowserPhoneColors.light,
       ],
     );
     return base.copyWith(
-      scaffoldBackgroundColor: brightness == Brightness.dark
-          ? BPColors.pageDark
-          : BPColors.pageLight,
+      scaffoldBackgroundColor: isDark ? BPColors.pageDark : BPColors.pageLight,
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
         foregroundColor: scheme.onSurface,

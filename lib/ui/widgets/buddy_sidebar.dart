@@ -395,14 +395,23 @@ class _BuddyTile extends StatelessWidget {
   }
 }
 
-class _SidebarToolbar extends StatelessWidget {
+class _SidebarToolbar extends ConsumerWidget {
   const _SidebarToolbar({required this.onDial, required this.onLog});
   final VoidCallback onDial;
   final VoidCallback onLog;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final mode = ref.watch(themeModeProvider);
+    final (themeIcon, themeTooltip) = switch (mode) {
+      ThemeMode.system => (
+        Icons.brightness_auto,
+        'Theme: system (tap to switch)',
+      ),
+      ThemeMode.light => (Icons.light_mode, 'Theme: light (tap to switch)'),
+      ThemeMode.dark => (Icons.dark_mode, 'Theme: dark (tap to switch)'),
+    };
     return Container(
       color: scheme.surfaceContainerLow,
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -421,6 +430,12 @@ class _SidebarToolbar extends StatelessWidget {
             color: scheme.primary,
           ),
           const Spacer(),
+          IconButton(
+            tooltip: themeTooltip,
+            onPressed: () => ref.read(themeModeProvider.notifier).cycle(),
+            icon: Icon(themeIcon),
+            color: scheme.primary,
+          ),
         ],
       ),
     );

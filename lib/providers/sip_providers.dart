@@ -18,6 +18,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -340,6 +341,51 @@ class DialerInputNotifier extends Notifier<String> {
 
 final dialerInputProvider = NotifierProvider<DialerInputNotifier, String>(
   DialerInputNotifier.new,
+);
+
+// ── Theme mode ──────────────────────────────────────────────────────────────
+
+const String _kThemeModeKey = 'theme_mode_v1';
+
+/// User-selected theme mode. Defaults to [ThemeMode.system] but persists any
+/// override (light / dark) across launches via SharedPreferences.
+class ThemeModeNotifier extends Notifier<ThemeMode> {
+  @override
+  ThemeMode build() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    return _decode(prefs.getString(_kThemeModeKey));
+  }
+
+  Future<void> set(ThemeMode mode) async {
+    state = mode;
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setString(_kThemeModeKey, _encode(mode));
+  }
+
+  /// Cycle system → light → dark → system. Used by the sidebar toggle.
+  Future<void> cycle() {
+    return set(switch (state) {
+      ThemeMode.system => ThemeMode.light,
+      ThemeMode.light => ThemeMode.dark,
+      ThemeMode.dark => ThemeMode.system,
+    });
+  }
+
+  static String _encode(ThemeMode m) => switch (m) {
+    ThemeMode.system => 'system',
+    ThemeMode.light => 'light',
+    ThemeMode.dark => 'dark',
+  };
+
+  static ThemeMode _decode(String? s) => switch (s) {
+    'light' => ThemeMode.light,
+    'dark' => ThemeMode.dark,
+    _ => ThemeMode.system,
+  };
+}
+
+final themeModeProvider = NotifierProvider<ThemeModeNotifier, ThemeMode>(
+  ThemeModeNotifier.new,
 );
 
 /// Per-peer unread counter, incremented when a new inbound message arrives
