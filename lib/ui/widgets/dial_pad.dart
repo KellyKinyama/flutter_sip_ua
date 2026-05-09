@@ -34,28 +34,28 @@ class DialPad extends StatelessWidget {
         // narrow screens but keep the BP look on regular widths.
         final keySize = ((width - gap * 2) / 3).clamp(
           compact ? 48.0 : 55.0,
-          compact ? 64.0 : 78.0,
+          compact ? 64.0 : 72.0,
         );
-        final pad = compact ? 4.0 : 8.0;
+        // BP keeps rows visually tight (the 7px digit margin only applies
+        // inside the button); we just need a small gap between rows.
+        final rowGap = compact ? 4.0 : 8.0;
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final row in _rows) ...[
-              Padding(
-                padding: EdgeInsets.symmetric(vertical: pad),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    for (final k in row)
-                      _KeyButton(
-                        size: keySize,
-                        digit: k.digit,
-                        letters: k.letters,
-                        onTap: () => onKey(k.digit),
-                        onLongPress: k.digit == '0' ? onLongZero : null,
-                      ),
-                  ],
-                ),
+            for (var i = 0; i < _rows.length; i++) ...[
+              if (i > 0) SizedBox(height: rowGap),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final k in _rows[i])
+                    _KeyButton(
+                      size: keySize,
+                      digit: k.digit,
+                      letters: k.letters,
+                      onTap: () => onKey(k.digit),
+                      onLongPress: k.digit == '0' ? onLongZero : null,
+                    ),
+                ],
               ),
             ],
           ],
@@ -93,6 +93,7 @@ class _KeyButton extends StatelessWidget {
     // Browser-Phone .dialButtons:
     //   light: bg #eeeeee  text #3478f3 (.dialButtons span -> #999)
     //   dark : bg #404040  text #cccccc (.dialButtons span -> #999)
+    //   :active (pressed)  bg #666666   text #ffffff   (both modes)
     final isDark = theme.brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF404040) : const Color(0xFFEEEEEE);
     final fg = isDark ? const Color(0xFFCCCCCC) : scheme.primary;
@@ -103,7 +104,10 @@ class _KeyButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        splashColor: scheme.primary.withValues(alpha: 0.15),
+        // BP `.dialButtons:active { background-color: #666666; color: #FFFFFF }`
+        // — the splash colour mimics the same dark grey flash.
+        splashColor: const Color(0xFF666666).withValues(alpha: 0.45),
+        highlightColor: const Color(0xFF666666).withValues(alpha: 0.20),
         child: SizedBox(
           width: size,
           height: size,

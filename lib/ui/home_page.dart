@@ -372,7 +372,10 @@ class _DialerSheetState extends ConsumerState<_DialerSheet> {
     }
     final ready = canCall && dialed.trim().isNotEmpty;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+      // BP `.dialCall` block sits in a 25 px gutter; we honour that with
+      // a generous outer padding (more on the bottom so the action row
+      // breathes against the sheet edge).
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -386,10 +389,26 @@ class _DialerSheetState extends ConsumerState<_DialerSheet> {
                     fontWeight: FontWeight.w500,
                     letterSpacing: 1.2,
                   ),
-                  decoration: const InputDecoration(
+                  // Browser-Phone `.dialTextInput` keeps a 1px bottom
+                  // underline that thickens to #333 on focus.
+                  decoration: InputDecoration(
                     hintText: 'Extension or sip:',
-                    border: InputBorder.none,
                     filled: false,
+                    enabledBorder: UnderlineInputBorder(
+                      borderSide: BorderSide(
+                        color: theme.brightness == Brightness.dark
+                            ? const Color(0xFF555555)
+                            : const Color(0xFFCCCCCC),
+                      ),
+                    ),
+                    focusedBorder: UnderlineInputBorder(
+                      borderSide: BorderSide(
+                        color: theme.brightness == Brightness.dark
+                            ? const Color(0xFFCCCCCC)
+                            : const Color(0xFF333333),
+                        width: 1.5,
+                      ),
+                    ),
                   ),
                   onChanged: (v) =>
                       ref.read(dialerInputProvider.notifier).set(v),
@@ -403,9 +422,11 @@ class _DialerSheetState extends ConsumerState<_DialerSheet> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           DialPad(onKey: _append, onLongZero: () => _append('+')),
-          const SizedBox(height: 24),
+          // The action row carries its own 18 px of vertical padding to
+          // mirror BP `.dialCall { padding: 25px; margin-top: 10px }`,
+          // so we don't need an extra SizedBox here.
           DialerActionRow(
             enabled: ready,
             onAudioCall: () => widget.onCall(_dial.text.trim()),
