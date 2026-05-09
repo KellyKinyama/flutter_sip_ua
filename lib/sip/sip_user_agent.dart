@@ -61,6 +61,11 @@ class SipCall {
   CallState state;
   DateTime? startedAt;
   DateTime? endedAt;
+
+  /// True while the call is locally or remotely on hold. Mirrors the
+  /// internal context held flag and is updated before [_emitCall] so the
+  /// UI sees the change reactively.
+  bool held = false;
 }
 
 class SipAccount {
@@ -351,6 +356,7 @@ class SipUserAgent {
     if (ctx.call.state != CallState.active) return null;
     if (ctx.held == hold) return ctx.held;
     ctx.held = hold;
+    ctx.call.held = hold;
     final media = ctx.media;
     if (media != null) media.muted = hold;
     _sendReinvite(ctx);
@@ -757,6 +763,7 @@ class SipUserAgent {
             offered.direction == SdpDirection.inactive;
         if (peerHolds != wasHeld) {
           existing.held = peerHolds;
+          existing.call.held = peerHolds;
           // Stop sending audio while the peer holds us; resume on unhold.
           existing.media?.muted = peerHolds;
           _emitCall(existing.call);

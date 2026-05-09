@@ -9,6 +9,7 @@ import 'login_page.dart';
 import 'widgets/buddy_sidebar.dart';
 import 'widgets/buddy_stream.dart';
 import 'widgets/dial_pad.dart';
+import 'widgets/dialer_action_row.dart';
 import 'widgets/welcome_pane.dart';
 
 /// Browser-Phone style two-pane home: a buddy sidebar plus a content area
@@ -227,7 +228,6 @@ class _HomePageState extends ConsumerState<HomePage> {
   // ---------------------------------------------------------------------------
 
   Future<void> _openDialer() async {
-    final canCall = ref.read(isRegisteredProvider);
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -243,10 +243,13 @@ class _HomePageState extends ConsumerState<HomePage> {
                 maxHeight: MediaQuery.of(ctx).size.height * 0.85,
               ),
               child: _DialerSheet(
-                canCall: canCall,
                 onCall: (target) {
                   Navigator.of(ctx).pop();
                   _placeCall(target);
+                },
+                onMessage: (target, body) {
+                  Navigator.of(ctx).pop();
+                  ref.read(sipUserAgentProvider).sendMessage(target, body);
                 },
               ),
             ),
@@ -271,22 +274,43 @@ class _HomePageState extends ConsumerState<HomePage> {
 // Dialer sheet
 // ---------------------------------------------------------------------------
 
-class _DialerSheet extends StatefulWidget {
-  const _DialerSheet({required this.canCall, required this.onCall});
-  final bool canCall;
+/// Browser-Phone style dialer:
+///   * The typed digits live in [dialerInputProvider] so the sheet
+///     can be dismissed and reopened (or have its number pre-populated
+///     from a buddy tile) without losing state.
+///   * A bottom action row offers Video / Audio / Message instead of a
+///     single dial button.
+class _DialerSheet extends ConsumerStatefulWidget {
+  const _DialerSheet({required this.onCall, required this.onMessage});
+
   final void Function(String target) onCall;
+  final void Function(String target, String body) onMessage;
 
   @override
-  State<_DialerSheet> createState() => _DialerSheetState();
+  ConsumerState<_DialerSheet> createState() => _DialerSheetState();
 }
 
-class _DialerSheetState extends State<_DialerSheet> {
-  final TextEditingController _dial = TextEditingController();
+class _DialerSheetState extends ConsumerState<_DialerSheet> {
+  late final TextEditingController _dial;
+
+  @override
+  void initState() {
+    super.initState();
+    _dial = TextEditingController(text: ref.read(dialerInputProvider));
+  }
 
   @override
   void dispose() {
     _dial.dispose();
     super.dispose();
+  }
+
+  void _setText(String value) {
+    _dial.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
+    ref.read(dialerInputProvider.notifier).set(value);
   }
 
   void _append(String d) {
@@ -301,37 +325,52 @@ class _DialerSheetState extends State<_DialerSheet> {
     } else {
       c.text += d;
     }
-    setState(() {});
+    ref.read(dialerInputProvider.notifier).set(c.text);
   }
 
   void _backspace() {
     final c = _dial;
     if (c.text.isEmpty) return;
     final sel = c.selection;
-    if (sel.isValid && sel.start > 0) {
+    if (sel.isValid && sel.start > 0 && sel.start == sel.end) {
       final start = sel.start;
-      final end = sel.end;
-      if (start == end) {
-        c.value = TextEditingValue(
-          text: c.text.replaceRange(start - 1, end, ''),
-          selection: TextSelection.collapsed(offset: start - 1),
-        );
-      } else {
-        c.value = TextEditingValue(
-          text: c.text.replaceRange(start, end, ''),
-          selection: TextSelection.collapsed(offset: start),
-        );
-      }
+      c.value = TextEditingValue(
+        text: c.text.replaceRange(start - 1, start, ''),
+        selection: TextSelection.collapsed(offset: start - 1),
+      );
+    } else if (sel.isValid && sel.start != sel.end) {
+      c.value = TextEditingValue(
+        text: c.text.replaceRange(sel.start, sel.end, ''),
+        selection: TextSelection.collapsed(offset: sel.start),
+      );
     } else {
       c.text = c.text.substring(0, c.text.length - 1);
     }
-    setState(() {});
+    ref.read(dialerInputProvider.notifier).set(c.text);
+  }
+
+  Future<void> _composeMessage() async {
+    final target = _dial.text.trim();
+    if (target.isEmpty) return;
+    final body = await _MessageComposeSheet.show(context, target: target);
+    if (body == null || body.isEmpty) return;
+    widget.onMessage(target, body);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final ready = widget.canCall && _dial.text.trim().isNotEmpty;
+    final canCall = ref.watch(isRegisteredProvider);
+    final dialed = ref.watch(dialerInputProvider);
+    // Keep the controller in sync if the provider was changed externally
+    // (e.g. by selecting a buddy and pressing "Call back").
+    if (dialed != _dial.text) {
+      _dial.value = TextEditingValue(
+        text: dialed,
+        selection: TextSelection.collapsed(offset: dialed.length),
+      );
+    }
+    final ready = canCall && dialed.trim().isNotEmpty;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       child: Column(
@@ -352,26 +391,110 @@ class _DialerSheetState extends State<_DialerSheet> {
                     border: InputBorder.none,
                     filled: false,
                   ),
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (v) =>
+                      ref.read(dialerInputProvider.notifier).set(v),
                 ),
               ),
               IconButton(
                 tooltip: 'Backspace',
-                onPressed: _dial.text.isEmpty ? null : _backspace,
-                onLongPress: () {
-                  _dial.clear();
-                  setState(() {});
-                },
+                onPressed: dialed.isEmpty ? null : _backspace,
+                onLongPress: dialed.isEmpty ? null : () => _setText(''),
                 icon: const Icon(Icons.backspace_outlined),
               ),
             ],
           ),
           const SizedBox(height: 16),
           DialPad(onKey: _append, onLongZero: () => _append('+')),
-          const SizedBox(height: 20),
-          DialCallButton(
-            size: 72,
-            onPressed: ready ? () => widget.onCall(_dial.text.trim()) : null,
+          const SizedBox(height: 24),
+          DialerActionRow(
+            enabled: ready,
+            onAudioCall: () => widget.onCall(_dial.text.trim()),
+            onMessage: _composeMessage,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tiny modal for composing a one-shot SIP MESSAGE from the dialer.
+class _MessageComposeSheet extends StatefulWidget {
+  const _MessageComposeSheet({required this.target});
+  final String target;
+
+  static Future<String?> show(BuildContext context, {required String target}) {
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: _MessageComposeSheet(target: target),
+      ),
+    );
+  }
+
+  @override
+  State<_MessageComposeSheet> createState() => _MessageComposeSheetState();
+}
+
+class _MessageComposeSheetState extends State<_MessageComposeSheet> {
+  final _ctl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsets + 20, top: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Message ${widget.target}',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctl,
+            autofocus: true,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              hintText: 'Type your message…',
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () {
+                    final body = _ctl.text.trim();
+                    if (body.isEmpty) return;
+                    Navigator.of(context).pop(body);
+                  },
+                  icon: const Icon(Icons.send),
+                  label: const Text('Send'),
+                ),
+              ),
+            ],
           ),
         ],
       ),

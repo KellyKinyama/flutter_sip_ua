@@ -321,6 +321,27 @@ final selectedBuddyProvider = NotifierProvider<SelectedBuddyNotifier, String?>(
   SelectedBuddyNotifier.new,
 );
 
+/// Persistent dialer input. Lives in Riverpod so the dial pad sheet can be
+/// dismissed and reopened without losing the typed digits, and so other
+/// surfaces (e.g. tapping a buddy's "call" button) can pre-populate it.
+class DialerInputNotifier extends Notifier<String> {
+  @override
+  String build() => '';
+
+  void set(String value) => state = value;
+  void append(String s) => state = state + s;
+  void backspace() {
+    if (state.isEmpty) return;
+    state = state.substring(0, state.length - 1);
+  }
+
+  void clear() => state = '';
+}
+
+final dialerInputProvider = NotifierProvider<DialerInputNotifier, String>(
+  DialerInputNotifier.new,
+);
+
 /// Per-peer unread counter, incremented when a new inbound message arrives
 /// for a peer who is not the currently selected buddy.
 class UnreadNotifier extends Notifier<Map<String, int>> {
