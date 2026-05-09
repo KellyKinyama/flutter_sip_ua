@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/sip_providers.dart';
 import '../../sip/sip_user_agent.dart';
+import '../bp_palette.dart';
 import 'status_chip.dart';
 
 /// Browser-Phone style left rail: account header, search, buddy list and a
@@ -100,15 +101,14 @@ class _BuddySidebarState extends ConsumerState<BuddySidebar> {
                     itemCount: filtered.length,
                     itemBuilder: (_, i) {
                       final b = filtered[i];
-                      final isActive =
-                          selected != null &&
-                          selected.toLowerCase().contains(
-                            b.displayName.toLowerCase(),
-                          ) &&
-                          b.peer == selected;
+                      final isActive = selected != null && b.peer == selected;
+                      final lineState = ref.watch(
+                        peerLineStateProvider(b.peer),
+                      );
                       return _BuddyTile(
                         buddy: b,
                         selected: isActive,
+                        lineState: lineState,
                         onTap: () {
                           ref
                               .read(selectedBuddyProvider.notifier)
@@ -230,103 +230,140 @@ class _BuddyTile extends StatelessWidget {
   const _BuddyTile({
     required this.buddy,
     required this.selected,
+    required this.lineState,
     required this.onTap,
   });
   final Buddy buddy;
   final bool selected;
+  final BuddyLineState lineState;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final bp = theme.bp;
     final preview = _previewLine(buddy);
-    return Material(
-      color: selected ? scheme.primaryContainer : Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              PartyAvatar(party: buddy.peer, size: 40),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            buddy.displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: selected
-                                  ? scheme.onPrimaryContainer
-                                  : scheme.onSurface,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          _formatTimestamp(buddy.lastActivity),
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: selected
-                                ? scheme.onPrimaryContainer.withValues(
-                                    alpha: 0.8,
-                                  )
-                                : scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            preview,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: selected
-                                  ? scheme.onPrimaryContainer.withValues(
-                                      alpha: 0.85,
-                                    )
-                                  : scheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                        if (buddy.unread > 0) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: scheme.primary,
-                              borderRadius: BorderRadius.circular(999),
-                            ),
+
+    // Mirror the Browser-Phone CSS:
+    //   .buddy           transparent left border
+    //   .buddySelected   blue (#3478f3) left border
+    //   .buddyActiveCall green (#40bd3f) left border + tinted bg
+    //   .buddyActiveCallHollding grey (#999) left border + tinted bg
+    final Color borderColor;
+    final Color rowBg;
+    final Color titleColor;
+    switch (lineState) {
+      case BuddyLineState.inCall:
+        borderColor = bp.activeCall;
+        rowBg = bp.buddyActive;
+        titleColor = scheme.onSurface;
+        break;
+      case BuddyLineState.onHold:
+        borderColor = bp.holdingCall;
+        rowBg = bp.buddyHold;
+        titleColor = scheme.onSurfaceVariant;
+        break;
+      case BuddyLineState.ringing:
+        borderColor = bp.presenceRinging;
+        rowBg = selected ? bp.buddySelected : Colors.transparent;
+        titleColor = scheme.onSurface;
+        break;
+      case BuddyLineState.idle:
+        borderColor = selected ? scheme.primary : Colors.transparent;
+        rowBg = selected ? bp.buddySelected : Colors.transparent;
+        titleColor = scheme.onSurface;
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 1, 6, 2),
+      child: Material(
+        color: rowBg,
+        borderRadius: BorderRadius.circular(6),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border(left: BorderSide(color: borderColor, width: 3)),
+            ),
+            padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _AvatarWithPresence(
+                  party: buddy.peer,
+                  size: 38,
+                  state: lineState,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
                             child: Text(
-                              buddy.unread > 99 ? '99+' : '${buddy.unread}',
-                              style: TextStyle(
-                                color: scheme.onPrimary,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
+                              buddy.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: titleColor,
                               ),
                             ),
                           ),
+                          Text(
+                            _formatTimestamp(buddy.lastActivity),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
                         ],
-                      ],
-                    ),
-                  ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              preview,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          if (buddy.unread > 0) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: BPColors.hangup,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                buddy.unread > 99 ? '99+' : '${buddy.unread}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -365,21 +402,84 @@ class _SidebarToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      color: scheme.surfaceContainerLow,
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           IconButton(
             tooltip: 'Open dialer',
             onPressed: onDial,
             icon: const Icon(Icons.dialpad),
+            color: scheme.primary,
           ),
           IconButton(
-            tooltip: 'Call log',
+            tooltip: 'SIP wire log',
             onPressed: onLog,
             icon: const Icon(Icons.terminal),
+            color: scheme.primary,
           ),
           const Spacer(),
+        ],
+      ),
+    );
+  }
+}
+
+/// Avatar with a small presence pip in the lower-right corner that
+/// reproduces Browser-Phone's `.dotOnline / .dotRinging / .dotInUse`
+/// indicators next to each contact.
+class _AvatarWithPresence extends StatelessWidget {
+  const _AvatarWithPresence({
+    required this.party,
+    required this.size,
+    required this.state,
+  });
+  final String party;
+  final double size;
+  final BuddyLineState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final bp = Theme.of(context).bp;
+    final scheme = Theme.of(context).colorScheme;
+    final Color dot;
+    switch (state) {
+      case BuddyLineState.inCall:
+        dot = bp.presenceInUse;
+        break;
+      case BuddyLineState.onHold:
+        dot = bp.presenceOnHold;
+        break;
+      case BuddyLineState.ringing:
+        dot = bp.presenceRinging;
+        break;
+      case BuddyLineState.idle:
+        dot = bp.presenceOnline;
+        break;
+    }
+    final pip = (size * 0.32).clamp(10.0, 14.0);
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          PartyAvatar(party: party, size: size),
+          Positioned(
+            right: -1,
+            bottom: -1,
+            child: Container(
+              width: pip,
+              height: pip,
+              decoration: BoxDecoration(
+                color: dot,
+                shape: BoxShape.circle,
+                border: Border.all(color: scheme.surface, width: 2),
+              ),
+            ),
+          ),
         ],
       ),
     );

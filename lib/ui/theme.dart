@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
-/// Centralised Material 3 theming for the app. A single seed colour drives
-/// both the light and dark palettes so the look stays cohesive while still
-/// adapting to the platform's preferred brightness.
+import 'bp_palette.dart';
+
+/// Centralised Material 3 theming for the app. Seed colour matches the
+/// InnovateAsterisk Browser-Phone accent (#3478F3) so light and dark
+/// schemes produce the same recognisable softphone look.
 class AppTheme {
   AppTheme._();
 
-  static const Color seed = Color(0xFF3D5AFE);
+  static const Color seed = BPColors.primary;
 
   static ThemeData light() => _build(Brightness.light);
   static ThemeData dark() => _build(Brightness.dark);
@@ -20,9 +22,16 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       visualDensity: VisualDensity.standard,
+      extensions: <ThemeExtension<dynamic>>[
+        brightness == Brightness.dark
+            ? BrowserPhoneColors.dark
+            : BrowserPhoneColors.light,
+      ],
     );
     return base.copyWith(
-      scaffoldBackgroundColor: scheme.surface,
+      scaffoldBackgroundColor: brightness == Brightness.dark
+          ? BPColors.pageDark
+          : BPColors.pageLight,
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
         foregroundColor: scheme.onSurface,

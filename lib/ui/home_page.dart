@@ -369,21 +369,9 @@ class _DialerSheetState extends State<_DialerSheet> {
           const SizedBox(height: 16),
           DialPad(onKey: _append, onLongZero: () => _append('+')),
           const SizedBox(height: 20),
-          SizedBox(
-            width: 72,
-            height: 72,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: ready
-                    ? Colors.green.shade600
-                    : theme.disabledColor,
-                foregroundColor: Colors.white,
-                shape: const CircleBorder(),
-                padding: EdgeInsets.zero,
-              ),
-              onPressed: ready ? () => widget.onCall(_dial.text.trim()) : null,
-              child: const Icon(Icons.call, size: 32),
-            ),
+          DialCallButton(
+            size: 72,
+            onPressed: ready ? () => widget.onCall(_dial.text.trim()) : null,
           ),
         ],
       ),

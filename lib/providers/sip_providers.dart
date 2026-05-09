@@ -424,3 +424,46 @@ final peerCallsProvider = Provider.family<List<SipCall>, String>((ref, peer) {
   final all = ref.watch(callsProvider).recents;
   return all.where((c) => _peerKey(c.remoteParty) == key).toList();
 });
+
+/// High-level "line state" for a buddy, equivalent to Browser-Phone's
+/// `.dotOnline` / `.dotRinging` / `.dotInUse` / `.buddyActiveCall` /
+/// `.buddyActiveCallHollding` styling.
+enum BuddyLineState {
+  /// No active call; default presence pip.
+  idle,
+
+  /// An INVITE is in flight (incoming or outgoing) for this buddy.
+  ringing,
+
+  /// A call with this buddy is currently connected.
+  inCall,
+
+  /// A call with this buddy is connected but on hold.
+  onHold,
+}
+
+/// Per-peer line state derived from recent calls, used by the buddy list
+/// and the stream header to mirror the Browser-Phone visual cues.
+final peerLineStateProvider = Provider.family<BuddyLineState, String>((
+  ref,
+  peer,
+) {
+  final key = _peerKey(peer);
+  final recents = ref.watch(callsProvider).recents;
+  for (final c in recents) {
+    if (_peerKey(c.remoteParty) != key) continue;
+    switch (c.state) {
+      case CallState.active:
+        // We don't track hold state at the call-list level yet; future
+        // hook: read `ua.isHeld(c.id)` once that becomes streamable.
+        return BuddyLineState.inCall;
+      case CallState.incomingRinging:
+      case CallState.outgoingRinging:
+        return BuddyLineState.ringing;
+      case CallState.ended:
+      case CallState.idle:
+        continue;
+    }
+  }
+  return BuddyLineState.idle;
+});

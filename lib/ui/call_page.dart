@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/sip_providers.dart';
 import '../sip/sip_user_agent.dart';
+import 'bp_palette.dart';
 import 'widgets/dial_pad.dart';
 import 'widgets/status_chip.dart';
 
@@ -130,128 +132,153 @@ class _CallPageState extends ConsumerState<CallPage>
     final isRinging =
         state == CallState.incomingRinging ||
         state == CallState.outgoingRinging;
+    final bp = Theme.of(context).bp;
 
-    final gradient = LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: switch (state) {
-        CallState.active => [
-          scheme.primary,
-          Color.lerp(scheme.primary, scheme.surface, 0.6) ?? scheme.surface,
-        ],
-        CallState.ended => [scheme.errorContainer, scheme.surface],
-        _ => [
-          Color.lerp(scheme.primary, scheme.surface, 0.3) ?? scheme.surface,
-          scheme.surface,
-        ],
-      },
+    // Browser-Phone .CallPictureUnderlay + .CallColorUnderlay: a blurred
+    // tinted backdrop derived from the buddy avatar color, with a radial
+    // dimming overlay so the foreground UI stays readable.
+    final accent = switch (state) {
+      CallState.active => bp.activeCall,
+      CallState.ended => bp.hangup,
+      CallState.incomingRinging => bp.presenceRinging,
+      CallState.outgoingRinging => scheme.primary,
+      CallState.idle => scheme.primary,
+    };
+    final gradient = RadialGradient(
+      center: Alignment.topCenter,
+      radius: 1.4,
+      colors: [
+        Color.lerp(accent, scheme.surface, 0.35) ?? scheme.surface,
+        scheme.surface,
+      ],
     );
 
     return PopScope(
       canPop: state == CallState.ended,
       child: Scaffold(
-        body: Container(
-          decoration: BoxDecoration(gradient: gradient),
-          child: SafeArea(
-            child: c == null
-                ? const Center(child: CircularProgressIndicator())
-                : Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Row(
-                          children: [
-                            IconButton(
-                              tooltip: 'Minimise',
-                              onPressed: state == CallState.ended
-                                  ? null
-                                  : () => Navigator.of(context).maybePop(),
-                              icon: const Icon(Icons.expand_more),
-                            ),
-                            const Spacer(),
-                            Text(
-                              c.outgoing ? 'Outgoing' : 'Incoming',
-                              style: Theme.of(context).textTheme.labelLarge
-                                  ?.copyWith(
-                                    color: scheme.onSurface.withValues(
-                                      alpha: 0.7,
-                                    ),
-                                  ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-                        _PulsingAvatar(
-                          party: c.remoteParty,
-                          animate: isRinging,
-                          controller: _pulse,
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          _displayName(c.remoteParty),
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _subtitle(c.remoteParty),
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: scheme.onSurface.withValues(alpha: 0.6),
-                              ),
-                        ),
-                        const SizedBox(height: 24),
-                        Text(
-                          _stateLabel(state),
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                                fontWeight: FontWeight.w500,
-                              ),
-                        ),
-                        const Spacer(),
-                        if (_showKeypad && state == CallState.active)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 16),
-                            child: DialPad(compact: true, onKey: _sendDtmf),
-                          )
-                        else if (state == CallState.active)
-                          _ActionGrid(
-                            muted: _muted,
-                            speaker: _speaker,
-                            onMute: _toggleMute,
-                            onSpeaker: () =>
-                                setState(() => _speaker = !_speaker),
-                            onKeypad: () => setState(() => _showKeypad = true),
-                          ),
-                        if (_showKeypad)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: TextButton.icon(
-                              onPressed: () =>
-                                  setState(() => _showKeypad = false),
-                              icon: const Icon(Icons.keyboard_arrow_down),
-                              label: const Text('Hide keypad'),
-                            ),
-                          ),
-                        _CallActionBar(
-                          state: state,
-                          onAnswer: () => _ua.answer(c.id),
-                          onHangup: () => _ua.hangup(c.id),
-                        ),
-                      ],
-                    ),
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: Container(decoration: BoxDecoration(gradient: gradient)),
+            ),
+            Positioned.fill(
+              child: ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(sigmaX: 60, sigmaY: 60),
+                child: Opacity(
+                  opacity: 0.25,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: c == null
+                        ? const SizedBox.shrink()
+                        : PartyAvatar(party: c.remoteParty, size: 360),
                   ),
-          ),
+                ),
+              ),
+            ),
+            SafeArea(
+              child: c == null
+                  ? const Center(child: CircularProgressIndicator())
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Minimise',
+                                onPressed: state == CallState.ended
+                                    ? null
+                                    : () => Navigator.of(context).maybePop(),
+                                icon: const Icon(Icons.expand_more),
+                              ),
+                              const Spacer(),
+                              Text(
+                                c.outgoing ? 'Outgoing' : 'Incoming',
+                                style: Theme.of(context).textTheme.labelLarge
+                                    ?.copyWith(
+                                      color: scheme.onSurface.withValues(
+                                        alpha: 0.7,
+                                      ),
+                                    ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 24),
+                          _PulsingAvatar(
+                            party: c.remoteParty,
+                            animate: isRinging,
+                            controller: _pulse,
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            _displayName(c.remoteParty),
+                            style: Theme.of(context).textTheme.headlineSmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _subtitle(c.remoteParty),
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.6,
+                                  ),
+                                ),
+                          ),
+                          const SizedBox(height: 24),
+                          Text(
+                            _stateLabel(state),
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                          ),
+                          const Spacer(),
+                          if (_showKeypad && state == CallState.active)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: DialPad(compact: true, onKey: _sendDtmf),
+                            )
+                          else if (state == CallState.active)
+                            _ActionGrid(
+                              muted: _muted,
+                              speaker: _speaker,
+                              onMute: _toggleMute,
+                              onSpeaker: () =>
+                                  setState(() => _speaker = !_speaker),
+                              onKeypad: () =>
+                                  setState(() => _showKeypad = true),
+                            ),
+                          if (_showKeypad)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: TextButton.icon(
+                                onPressed: () =>
+                                    setState(() => _showKeypad = false),
+                                icon: const Icon(Icons.keyboard_arrow_down),
+                                label: const Text('Hide keypad'),
+                              ),
+                            ),
+                          _CallActionBar(
+                            state: state,
+                            onAnswer: () => _ua.answer(c.id),
+                            onHangup: () => _ua.hangup(c.id),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -426,6 +453,7 @@ class _CallActionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final isIncoming = state == CallState.incomingRinging;
     final isEnded = state == CallState.ended;
+    final bp = Theme.of(context).bp;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 16, top: 8),
@@ -434,13 +462,13 @@ class _CallActionBar extends StatelessWidget {
         children: [
           if (isIncoming)
             _BigCircleButton(
-              color: Colors.green.shade600,
+              color: bp.answer,
               icon: Icons.call,
               label: 'Answer',
               onTap: onAnswer,
             ),
           _BigCircleButton(
-            color: Colors.red.shade600,
+            color: bp.hangup,
             icon: Icons.call_end,
             label: isIncoming ? 'Decline' : (isEnded ? 'Close' : 'Hang up'),
             onTap: isEnded ? () => Navigator.of(context).maybePop() : onHangup,
