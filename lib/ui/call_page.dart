@@ -1,21 +1,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/sip_providers.dart';
 import '../sip/sip_user_agent.dart';
 import 'widgets/dial_pad.dart';
 import 'widgets/status_chip.dart';
 
-class CallPage extends StatefulWidget {
-  const CallPage({super.key, required this.ua, required this.callId});
-  final SipUserAgent ua;
+class CallPage extends ConsumerStatefulWidget {
+  const CallPage({super.key, required this.callId});
   final String callId;
 
   @override
-  State<CallPage> createState() => _CallPageState();
+  ConsumerState<CallPage> createState() => _CallPageState();
 }
 
-class _CallPageState extends State<CallPage>
+class _CallPageState extends ConsumerState<CallPage>
     with SingleTickerProviderStateMixin {
   StreamSubscription<SipCall>? _sub;
   SipCall? _call;
@@ -31,14 +32,17 @@ class _CallPageState extends State<CallPage>
     duration: const Duration(milliseconds: 1500),
   )..repeat(reverse: true);
 
+  SipUserAgent get _ua => ref.read(sipUserAgentProvider);
+
   @override
   void initState() {
     super.initState();
+    final ua = _ua;
     // Seed from the UA so we render the real state immediately. The
     // callStream is broadcast and won't replay the event that triggered
     // navigation here, so without this we'd be stuck on a spinner until
     // the next state change.
-    final initial = widget.ua.callById(widget.callId);
+    final initial = ua.callById(widget.callId);
     if (initial != null) {
       _call = initial;
       if (initial.state == CallState.active) {
@@ -51,7 +55,7 @@ class _CallPageState extends State<CallPage>
         });
       }
     }
-    _sub = widget.ua.callStream.listen((c) {
+    _sub = ua.callStream.listen((c) {
       if (c.id != widget.callId) return;
       _onUpdate(c);
     });
@@ -110,12 +114,12 @@ class _CallPageState extends State<CallPage>
 
   void _toggleMute() {
     final next = !_muted;
-    final applied = widget.ua.setMuted(widget.callId, next);
+    final applied = _ua.setMuted(widget.callId, next);
     if (applied != null) setState(() => _muted = applied);
   }
 
   void _sendDtmf(String d) {
-    widget.ua.sendDtmf(widget.callId, d);
+    _ua.sendDtmf(widget.callId, d);
   }
 
   @override
@@ -241,8 +245,8 @@ class _CallPageState extends State<CallPage>
                           ),
                         _CallActionBar(
                           state: state,
-                          onAnswer: () => widget.ua.answer(c.id),
-                          onHangup: () => widget.ua.hangup(c.id),
+                          onAnswer: () => _ua.answer(c.id),
+                          onHangup: () => _ua.hangup(c.id),
                         ),
                       ],
                     ),

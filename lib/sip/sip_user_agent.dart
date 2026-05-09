@@ -103,10 +103,18 @@ class SipTextMessage {
     required this.from,
     required this.body,
     required this.receivedAt,
+    this.to = '',
+    this.outgoing = false,
   });
   final String from;
+  final String to;
   final String body;
   final DateTime receivedAt;
+  final bool outgoing;
+
+  /// The remote party for this message regardless of direction. Useful when
+  /// grouping messages into a per-buddy thread.
+  String get peer => outgoing ? to : from;
 }
 
 class SipUserAgent {
@@ -532,6 +540,17 @@ class SipUserAgent {
       body: text,
     );
     _send(msg);
+    // Echo the outbound message into the message stream so that UIs which
+    // render two-sided threads can show the sent line immediately.
+    _messageCtl.add(
+      SipTextMessage(
+        from: acc.aor,
+        to: targetUri,
+        body: text,
+        receivedAt: DateTime.now(),
+        outgoing: true,
+      ),
+    );
   }
 
   // ===========================================================================
