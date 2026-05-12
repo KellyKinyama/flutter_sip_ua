@@ -1,73 +1,38 @@
-/// Append-only SIP wire-format logger. One file per launch; every inbound
-/// and outbound message is written verbatim with a timestamp + direction
-/// header so the file can be diffed against an Asterisk / dart-pbx pcap.
+/// Append-only SIP wire-format logger.
 ///
-/// Not used on `dart:js` targets — file IO requires `dart:io`.
+/// This file declares only the public interface and a [SipFileLogger.new]
+/// factory that resolves to the right implementation for the current
+/// platform via conditional imports:
+///
+///   * `sip_file_logger_io.dart`   — real `dart:io`-based logger.
+///   * `sip_file_logger_stub.dart` — no-op on platforms without `dart:io`
+///     (e.g. web).
 library;
-
-import 'dart:async';
-import 'dart:io';
 
 import 'sip_message.dart';
 
-class SipFileLogger {
-  SipFileLogger(this.path);
+import 'sip_file_logger_stub.dart'
+    if (dart.library.io) 'sip_file_logger_io.dart'
+    as impl;
 
-  /// Absolute path to the log file.
-  final String path;
+/// Wire-format logger. One file per launch on native; a no-op shim on web.
+abstract class SipFileLogger {
+  /// Construct the platform-default logger. On web returns a no-op
+  /// implementation that ignores [path].
+  factory SipFileLogger(String path) = impl.SipFileLoggerImpl;
 
-  IOSink? _sink;
+  /// Absolute path to the log file. May be empty on no-op web logger.
+  String get path;
 
-  /// Open (or create) the file in append mode. Synchronous so it's ready
-  /// before any SIP traffic flows. Safe to call more than once.
-  void open() {
-    if (_sink != null) return;
-    final f = File(path);
-    f.parent.createSync(recursive: true);
-    _sink = f.openWrite(mode: FileMode.append);
-    _sink!
-      ..writeln()
-      ..writeln(
-        '################################################################',
-      )
-      ..writeln('# session start  ${DateTime.now().toIso8601String()}')
-      ..writeln('# pid            $pid')
-      ..writeln(
-        '################################################################',
-      );
-  }
+  /// Open (or create) the log target. Safe to call more than once.
+  void open();
 
   /// Log a parsed message we just sent (`OUT`) or received (`IN`).
-  void log(String direction, SipMessage msg) {
-    final s = _sink;
-    if (s == null) return;
-    final summary = msg.isResponse
-        ? '${msg.statusCode} ${msg.reasonPhrase}'
-        : '${msg.method} ${msg.requestUri}';
-    s
-      ..writeln()
-      ..writeln(
-        '----- ${DateTime.now().toIso8601String()}  $direction  $summary -----',
-      )
-      ..write(msg.encode());
-  }
+  void log(String direction, SipMessage msg);
 
   /// Log a free-form line (transport state changes, errors, ...).
-  void note(String line) {
-    final s = _sink;
-    if (s == null) return;
-    s.writeln('# ${DateTime.now().toIso8601String()}  $line');
-  }
+  void note(String line);
 
-  Future<void> close() async {
-    final s = _sink;
-    _sink = null;
-    if (s == null) return;
-    try {
-      await s.flush();
-    } catch (_) {}
-    try {
-      await s.close();
-    } catch (_) {}
-  }
+  /// Flush and close.
+  Future<void> close();
 }

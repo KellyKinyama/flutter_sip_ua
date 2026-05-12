@@ -3,8 +3,11 @@
 /// Two pluggable implementations:
 ///
 ///  * [SipWebSocketTransport] — `ws://` / `wss://` to the dart-pbx WS server
-///    (Sec-WebSocket-Protocol: sip).
-///  * [SipUdpTransport]       — RFC 3261 §18 UDP, one datagram per message.
+///    (Sec-WebSocket-Protocol: sip). Works on every platform Flutter
+///    supports, including web.
+///  * `SipUdpTransport`       — RFC 3261 §18 UDP, one datagram per message.
+///    Provided by `transport_udp_io.dart` on platforms that have
+///    `dart:io`; on web the factory throws [UnsupportedError].
 ///
 /// Both expose the same surface ([SipTransport]) so the user agent doesn't
 /// care which one it talks over.
@@ -12,12 +15,18 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
+import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:web_socket_channel/io.dart';
 
 import 'sip_message.dart';
+
+// UDP transport lives in `transport_udp_io.dart` on native, where
+// `dart:io` is available. On web (no `dart:io`) the stub variant kicks in
+// and any attempt to construct a UDP transport throws.
+import 'transport_udp_stub.dart'
+    if (dart.library.io) 'transport_udp_io.dart'
+    as udp;
 
 enum TransportState { disconnected, connecting, connected }
 
@@ -47,7 +56,7 @@ abstract class SipTransport {
   ///
   ///   * ws://host:port  -> [SipWebSocketTransport]
   ///   * wss://host:port -> [SipWebSocketTransport]
-  ///   * sip:host:port   -> [SipUdpTransport]
+  ///   * sip:host:port   -> UDP transport (native only — throws on web)
   static SipTransport forUri(Uri serverUri) {
     final scheme = serverUri.scheme.toLowerCase();
     if (scheme == 'ws' || scheme == 'wss') {
@@ -56,14 +65,14 @@ abstract class SipTransport {
     if (scheme == 'sip' || scheme.isEmpty) {
       final host = serverUri.host.isEmpty ? serverUri.path : serverUri.host;
       final port = serverUri.hasPort ? serverUri.port : 5060;
-      return SipUdpTransport(remoteHost: host, remotePort: port);
+      return udp.createUdpTransport(remoteHost: host, remotePort: port);
     }
     throw UnsupportedError('Unsupported SIP transport scheme: $scheme');
   }
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket transport.
+// WebSocket transport (cross-platform; works on native and web).
 // ---------------------------------------------------------------------------
 
 class SipWebSocketTransport implements SipTransport {
@@ -94,7 +103,9 @@ class SipWebSocketTransport implements SipTransport {
     if (_channel != null) return;
     _stateCtl.add(TransportState.connecting);
     try {
-      _channel = IOWebSocketChannel.connect(uri, protocols: const ['sip']);
+      // Use the cross-platform constructor so this file is web-safe.
+      _channel = WebSocketChannel.connect(uri, protocols: const ['sip']);
+      await _channel!.ready;
       _sub = _channel!.stream.listen(
         _onData,
         onError: (_) => _stateCtl.add(TransportState.disconnected),
@@ -115,7 +126,7 @@ class SipWebSocketTransport implements SipTransport {
   Future<void> close() async {
     await _sub?.cancel();
     _sub = null;
-    await _channel?.sink.close();
+    await _channel?.sink.close(ws_status.normalClosure);
     _channel = null;
     _stateCtl.add(TransportState.disconnected);
   }
@@ -137,147 +148,6 @@ class SipWebSocketTransport implements SipTransport {
       _messageCtl.add(SipMessage.parse(raw));
     } catch (_) {
       /* drop malformed */
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// UDP transport.
-// ---------------------------------------------------------------------------
-
-class SipUdpTransport implements SipTransport {
-  SipUdpTransport({
-    required this.remoteHost,
-    required this.remotePort,
-    this.localBind,
-    this.localBindPort = 0,
-  });
-
-  final String remoteHost;
-  final int remotePort;
-  final String? localBind;
-  final int localBindPort;
-
-  RawDatagramSocket? _socket;
-  StreamSubscription<RawSocketEvent>? _sub;
-  InternetAddress? _remoteAddr;
-  String? _resolvedLocalHost;
-
-  final _stateCtl = StreamController<TransportState>.broadcast();
-  final _messageCtl = StreamController<SipMessage>.broadcast();
-
-  @override
-  Stream<TransportState> get state => _stateCtl.stream;
-  @override
-  Stream<SipMessage> get messages => _messageCtl.stream;
-  @override
-  bool get isConnected => _socket != null;
-  @override
-  String get protocol => 'UDP';
-
-  @override
-  String get localHost {
-    final s = _socket;
-    if (s == null) return localBind ?? '0.0.0.0';
-    // Prefer the address resolved at connect time. The socket itself reports
-    // 0.0.0.0 when bound to anyIPv4, which is unroutable in Contact/Via and
-    // is rejected by Asterisk with 403 Forbidden.
-    final resolved = _resolvedLocalHost;
-    if (resolved != null && resolved.isNotEmpty) return resolved;
-    final a = s.address.address;
-    if (a == '0.0.0.0' || a == '::') return localBind ?? a;
-    return a;
-  }
-
-  @override
-  int get localPort => _socket?.port ?? localBindPort;
-
-  @override
-  Future<void> connect() async {
-    if (_socket != null) return;
-    _stateCtl.add(TransportState.connecting);
-    try {
-      final bind = localBind == null
-          ? InternetAddress.anyIPv4
-          : InternetAddress(localBind!);
-      _socket = await RawDatagramSocket.bind(bind, localBindPort);
-      try {
-        _remoteAddr = InternetAddress(remoteHost);
-      } catch (_) {
-        final list = await InternetAddress.lookup(remoteHost);
-        if (list.isEmpty) {
-          throw const SocketException('Cannot resolve remote host');
-        }
-        _remoteAddr = list.first;
-      }
-      _resolvedLocalHost = await _discoverLocalAddress(_remoteAddr!);
-      _sub = _socket!.listen(_onEvent);
-      _stateCtl.add(TransportState.connected);
-    } catch (_) {
-      _stateCtl.add(TransportState.disconnected);
-      rethrow;
-    }
-  }
-
-  /// Pick a usable local IPv4 to advertise in Via/Contact. When the remote
-  /// is loopback we must reply on loopback as well; otherwise fall back to
-  /// the first non-loopback IPv4 interface (best-effort — no route table
-  /// access from pure Dart).
-  static Future<String> _discoverLocalAddress(InternetAddress remote) async {
-    if (remote.isLoopback) return remote.address;
-    try {
-      final ifaces = await NetworkInterface.list(
-        includeLoopback: false,
-        includeLinkLocal: false,
-        type: InternetAddressType.IPv4,
-      );
-      for (final iface in ifaces) {
-        for (final a in iface.addresses) {
-          if (a.type == InternetAddressType.IPv4 && !a.isLoopback) {
-            return a.address;
-          }
-        }
-      }
-    } catch (_) {
-      /* fall through */
-    }
-    return remote.isLoopback ? '127.0.0.1' : '0.0.0.0';
-  }
-
-  @override
-  Future<void> close() async {
-    await _sub?.cancel();
-    _sub = null;
-    _socket?.close();
-    _socket = null;
-    _remoteAddr = null;
-    _resolvedLocalHost = null;
-    _stateCtl.add(TransportState.disconnected);
-  }
-
-  @override
-  void send(SipMessage message) => sendRaw(message.encode());
-
-  @override
-  void sendRaw(String raw) {
-    final s = _socket;
-    final r = _remoteAddr;
-    if (s == null || r == null) throw StateError('transport not connected');
-    s.send(utf8.encode(raw), r, remotePort);
-  }
-
-  void _onEvent(RawSocketEvent ev) {
-    if (ev != RawSocketEvent.read) return;
-    final s = _socket;
-    if (s == null) return;
-    final dg = s.receive();
-    if (dg == null) return;
-    try {
-      final raw = utf8.decode(dg.data, allowMalformed: true);
-      if (raw.trim().isEmpty) return;
-      _messageCtl.add(SipMessage.parse(raw));
-    } catch (_) {
-      /* drop malformed datagram */
     }
   }
 }

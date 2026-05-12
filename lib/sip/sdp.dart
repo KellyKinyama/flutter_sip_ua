@@ -2,7 +2,7 @@
 /// (and optional VP8 video) against dart-pbx. Not a full RFC 4566 parser.
 library;
 
-import 'audio/media_session.dart';
+import 'audio/rtp_types.dart';
 
 /// Direction attribute (RFC 4566 §6).
 enum SdpDirection { sendrecv, sendonly, recvonly, inactive }
