@@ -23,14 +23,15 @@ import 'dart:math';
 import 'package:uuid/uuid.dart';
 
 import 'audio/audio_sink.dart';
-import 'audio/media_session.dart';
+import 'audio/media_session_platform.dart';
 import 'digest.dart';
+import 'is_web.dart' if (dart.library.io) 'is_web_io.dart';
 import 'sdp.dart';
 import 'sip_file_logger.dart';
 import 'sip_message.dart';
 import 'transport.dart';
 import 'video/video_codec.dart';
-import 'video/video_session.dart';
+import 'video/video_session_platform.dart';
 
 /// User-visible registration state.
 enum RegistrationState { unregistered, registering, registered, failed }
@@ -248,6 +249,13 @@ class SipUserAgent {
     final acc = _account;
     final tx = _transport;
     if (acc == null || tx == null || !tx.isConnected) return null;
+    if (isWeb) {
+      _log(
+        'makeCall: rejected — RTP media (UDP) is not supported on web. '
+        'Outgoing audio/video calls require a native build.',
+      );
+      return null;
+    }
     final targetUri = _normaliseTarget(target, acc.domain);
     final callId = _uuid.v4();
     final fromTag = _shortTag();
@@ -416,6 +424,13 @@ class SipUserAgent {
     if (ctx == null || ctx.call.state != CallState.incomingRinging) return;
     final acc = _account;
     if (acc == null) return;
+    if (isWeb) {
+      _log(
+        'answer: rejected — RTP media (UDP) is not supported on web. '
+        'Answering audio/video calls requires a native build.',
+      );
+      return;
+    }
 
     // Bind RTP socket and parse the peer's offer so we know where to send.
     final media = MediaSession(

@@ -15,8 +15,6 @@
 ///     can update it without forcing the rest of the app to read prefs.
 library;
 
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../sip/audio/pcm_audio_sink.dart';
 import '../sip/sip_file_logger.dart';
 import '../sip/sip_user_agent.dart';
+import 'log_path_stub.dart' if (dart.library.io) 'log_path_io.dart' as log_path;
 
 /// Storage key used to persist the SIP account across launches.
 const sipAccountPrefsKey = 'sip_account_v1';
@@ -72,16 +71,7 @@ final sipUserAgentProvider = Provider<SipUserAgent>((ref) {
   return ua;
 });
 
-String _buildLogPath() {
-  final ts = DateTime.now()
-      .toIso8601String()
-      .replaceAll(':', '-')
-      .replaceAll('.', '-');
-  final dir = Directory(
-    '${Directory.systemTemp.path}${Platform.pathSeparator}flutter_sip_ua',
-  );
-  return '${dir.path}${Platform.pathSeparator}sip-$ts.log';
-}
+String _buildLogPath() => log_path.buildLogPath();
 
 // ---------------------------------------------------------------------------
 // Account
