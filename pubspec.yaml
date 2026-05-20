@@ -16,7 +16,7 @@ issue_tracker: https://github.com/KellyKinyama/flutter_sip_ua/issues
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.1
 
 environment:
   sdk: ^3.11.5
@@ -47,6 +47,10 @@ dependencies:
   record: ^6.2.0
   flutter_pcm_sound: ^3.3.3
   flutter_riverpod: ^3.3.1
+
+  # Optional native-only RTP-over-QUIC side channel (WebTransport
+  # DATAGRAMs). Imported conditionally so web builds aren't affected.
+  pure_dart_quic: ^1.0.2
 
 dev_dependencies:
   flutter_test:
