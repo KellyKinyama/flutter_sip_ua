@@ -22,6 +22,10 @@ with a Riverpod-driven state layer and a modular widget tree.
 - Light **and** dark themes that mirror `phone.light.css` / `phone.dark.css`.
   Theme choice is persisted via SharedPreferences and toggled from the sidebar
   toolbar (system → light → dark).
+- **HTTP control API** (desktop only) — drive the running UA from a browser or
+  any HTTP client. See [docs/control_api.md](docs/control_api.md) and the
+  ready-to-open browser console at
+  [examples/control_api/index.html](examples/control_api/index.html).
 
 ## Why not `dart-sip-ua` + `flutter_webrtc`?
 
@@ -89,6 +93,8 @@ flutter test
 lib/
   main.dart
   providers/sip_providers.dart   # Riverpod facade over the SIP UA + UI state
+  providers/control_api_provider.dart  # Owns the embedded HTTP control server
+  control_api/                   # JSON REST + SSE wrapper around SipUserAgent
   sip/                           # Pure-Dart SIP UA, SDP, transport, audio/video
   ui/
     theme.dart                   # Light/dark ThemeData built from BP palette

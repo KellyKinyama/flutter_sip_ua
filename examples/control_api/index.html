@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>flutter_sip_ua — Control API console</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel2: #1f2330;
+      --border: #2b3142;
+      --text: #e7ecf3;
+      --muted: #8b95a7;
+      --accent: #4f8cff;
+      --good: #3ecf8e;
+      --bad: #ff5d6c;
+      --warn: #f5c451;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      grid-template-rows: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      overflow: auto;
+      background: var(--panel);
+    }
+    main {
+      display: grid;
+      grid-template-rows: auto 1fr 240px;
+      min-width: 0;
+    }
+    header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      background: var(--panel);
+    }
+    h1 { font-size: 16px; margin: 0; }
+    h2 { font-size: 13px; margin: 16px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: var(--panel2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .pill.ok   { color: var(--good); border-color: rgba(62,207,142,.4); }
+    .pill.bad  { color: var(--bad);  border-color: rgba(255,93,108,.4); }
+    .pill.warn { color: var(--warn); border-color: rgba(245,196,81,.4); }
+    label { display:block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+    input, button, select, textarea {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+      background: var(--accent);
+      color: white;
+      border-color: transparent;
+      font-weight: 600;
+    }
+    button.secondary { background: var(--panel2); color: var(--text); }
+    button.danger    { background: var(--bad); }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1 1 0; min-width: 0; }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px 14px;
+      margin: 0 0 12px;
+    }
+    fieldset legend { padding: 0 6px; color: var(--muted); font-size: 12px; }
+    .calls {
+      padding: 12px 16px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .call {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: var(--panel);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px 12px;
+    }
+    .call .who { font-weight: 600; }
+    .call .meta { color: var(--muted); font-size: 12px; }
+    .call .actions { display: flex; gap: 6px; flex-wrap: wrap; grid-column: 1 / -1; }
+    .call .actions button { width: auto; padding: 6px 10px; font-weight: 500; font-size: 13px; }
+    .log {
+      border-top: 1px solid var(--border);
+      background: #0a0c10;
+      color: #c8d1e0;
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 8px 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .log .ev { color: var(--accent); }
+    .log .err { color: var(--bad); }
+    .log .ok { color: var(--good); }
+    .empty { color: var(--muted); padding: 24px; text-align: center; }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Control API console</h1>
+    <p class="pill" id="status">disconnected</p>
+
+    <fieldset>
+      <legend>Endpoint</legend>
+      <label>Base URL</label>
+      <input id="baseUrl" value="http://127.0.0.1:8765" />
+      <label>Bearer token (optional)</label>
+      <input id="token" placeholder="leave empty if no token" />
+      <div class="row" style="margin-top:10px">
+        <button id="btnConnect">Connect</button>
+        <button id="btnDisconnect" class="secondary">Disconnect</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>SIP account</legend>
+      <label>WebSocket / SIP URI</label>
+      <input id="acc_serverUri" placeholder="wss://pbx.example.com:7443" />
+      <label>Domain</label>
+      <input id="acc_domain" placeholder="pbx.example.com" />
+      <div class="row">
+        <div>
+          <label>Username</label>
+          <input id="acc_user" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="acc_pass" type="password" />
+        </div>
+      </div>
+      <label>Display name (optional)</label>
+      <input id="acc_display" />
+      <div class="row" style="margin-top:10px">
+        <button id="btnRegister">Register</button>
+        <button id="btnUnregister" class="secondary">Sign out</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Dial</legend>
+      <label>Target (extension or SIP URI)</label>
+      <input id="dialTarget" placeholder="200 or sip:200@pbx.example.com" />
+      <div class="row" style="margin-top:10px">
+        <button id="btnCall">Call</button>
+        <button id="btnCallVideo" class="secondary">Video call</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Send message</legend>
+      <label>Target</label>
+      <input id="msgTarget" />
+      <label>Text</label>
+      <textarea id="msgText" rows="3"></textarea>
+      <button id="btnSend" style="margin-top:8px">Send MESSAGE</button>
+    </fieldset>
+  </aside>
+
+  <main>
+    <header>
+      <h1 style="flex:1">Calls</h1>
+      <span class="pill" id="regPill">unregistered</span>
+    </header>
+    <div class="calls" id="callsList">
+      <div class="empty">No active calls.</div>
+    </div>
+    <div class="log" id="log"></div>
+  </main>
+
+  <script>
+    // ────────────────────────────────────────────────────────────────────────
+    // Tiny client for the flutter_sip_ua HTTP control API.
+    // ────────────────────────────────────────────────────────────────────────
+    const $ = (id) => document.getElementById(id);
+    const calls = new Map(); // id -> call
+    let es = null;
+
+    function base() { return $('baseUrl').value.replace(/\/$/, ''); }
+    function token() { return $('token').value.trim(); }
+    function authHeaders(extra = {}) {
+      const h = { 'Content-Type': 'application/json', ...extra };
+      const t = token();
+      if (t) h['Authorization'] = 'Bearer ' + t;
+      return h;
+    }
+
+    async function api(path, { method = 'GET', body } = {}) {
+      const res = await fetch(base() + path, {
+        method,
+        headers: authHeaders(),
+        body: body == null ? undefined : JSON.stringify(body),
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!res.ok) {
+        log(`HTTP ${res.status} ${path} ${text}`, 'err');
+        throw new Error(`${res.status} ${path}`);
+      }
+      return data;
+    }
+
+    function log(line, cls = '') {
+      const el = $('log');
+      const div = document.createElement('div');
+      div.className = cls;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
+      el.appendChild(div);
+      el.scrollTop = el.scrollHeight;
+      while (el.childElementCount > 500) el.removeChild(el.firstChild);
+    }
+
+    function setStatus(text, cls) {
+      const s = $('status');
+      s.textContent = text;
+      s.className = 'pill ' + (cls || '');
+    }
+    function setReg(state) {
+      const p = $('regPill');
+      p.textContent = state;
+      p.className = 'pill ' + (state === 'registered' ? 'ok'
+                              : state === 'failed' ? 'bad'
+                              : 'warn');
+    }
+
+    function renderCalls() {
+      const list = $('callsList');
+      list.innerHTML = '';
+      const items = [...calls.values()]
+        .filter(c => c.state !== 'ended')
+        .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+      if (items.length === 0) {
+        const div = document.createElement('div');
+        div.className = 'empty';
+        div.textContent = 'No active calls.';
+        list.appendChild(div);
+        return;
+      }
+      for (const c of items) list.appendChild(callCard(c));
+    }
+
+    function callCard(c) {
+      const card = document.createElement('div');
+      card.className = 'call';
+      const dir = c.outgoing ? '→' : '←';
+      card.innerHTML = `
+        <div>
+          <div class="who">${dir} ${escapeHtml(c.remoteParty)}</div>
+          <div class="meta">${c.state}${c.held ? ' • held' : ''} • id ${c.id.slice(0, 8)}</div>
+        </div>
+        <div class="meta">${c.startedAt ? new Date(c.startedAt).toLocaleTimeString() : ''}</div>
+        <div class="actions"></div>
+      `;
+      const actions = card.querySelector('.actions');
+      const add = (label, fn, cls = 'secondary') => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.className = cls;
+        b.onclick = () => fn().catch((e) => log(e.message, 'err'));
+        actions.appendChild(b);
+      };
+      if (c.state === 'incomingRinging') {
+        add('Answer', () => api(`/calls/${c.id}/answer`, { method: 'POST' }), '');
+      }
+      if (c.state === 'active') {
+        add(c.held ? 'Resume' : 'Hold',
+            () => api(`/calls/${c.id}/hold`, { method: 'POST', body: { hold: !c.held } }));
+        add('Mute',   () => api(`/calls/${c.id}/mute`, { method: 'POST', body: { muted: true } }));
+        add('Unmute', () => api(`/calls/${c.id}/mute`, { method: 'POST', body: { muted: false } }));
+        for (const d of ['1', '2', '3', '#']) {
+          add(`DTMF ${d}`,
+              () => api(`/calls/${c.id}/dtmf`, { method: 'POST', body: { digit: d } }));
+        }
+      }
+      add('Hangup', () => api(`/calls/${c.id}/hangup`, { method: 'POST' }), 'danger');
+      return card;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    // ── SSE connect ──────────────────────────────────────────────────────────
+    function connect() {
+      disconnect();
+      const url = new URL(base() + '/events');
+      if (token()) url.searchParams.set('token', token());
+      es = new EventSource(url.toString());
+      es.onopen = () => { setStatus('connected', 'ok'); log('SSE connected', 'ok'); refreshStatus(); };
+      es.onerror = () => { setStatus('disconnected', 'bad'); log('SSE error', 'err'); };
+      es.addEventListener('registration', (e) => {
+        const d = JSON.parse(e.data);
+        setReg(d.state);
+        log(`registration: ${d.state}`, 'ev');
+      });
+      es.addEventListener('call', (e) => {
+        const c = JSON.parse(e.data);
+        calls.set(c.id, c);
+        renderCalls();
+        log(`call ${c.id.slice(0,8)} ${c.state} ${c.remoteParty}`, 'ev');
+      });
+      es.addEventListener('message', (e) => {
+        const m = JSON.parse(e.data);
+        log(`msg ${m.outgoing ? '→' : '←'} ${m.outgoing ? m.to : m.from}: ${m.body}`, 'ev');
+      });
+      es.addEventListener('log', (e) => {
+        const d = JSON.parse(e.data);
+        log(d.line);
+      });
+    }
+    function disconnect() {
+      if (es) { es.close(); es = null; }
+      setStatus('disconnected');
+    }
+
+    async function refreshStatus() {
+      try {
+        const s = await api('/status');
+        if (s.registration) setReg(s.registration);
+        if (s.account) {
+          $('acc_serverUri').value ||= s.account.serverUri || '';
+          $('acc_domain').value    ||= s.account.domain || '';
+          $('acc_user').value      ||= s.account.username || '';
+          $('acc_display').value   ||= s.account.displayName || '';
+        }
+      } catch {}
+    }
+
+    // ── Button wiring ────────────────────────────────────────────────────────
+    $('btnConnect').onclick    = connect;
+    $('btnDisconnect').onclick = disconnect;
+
+    $('btnRegister').onclick = () => api('/account', {
+      method: 'POST',
+      body: {
+        serverUri:   $('acc_serverUri').value.trim(),
+        domain:      $('acc_domain').value.trim(),
+        username:    $('acc_user').value.trim(),
+        password:    $('acc_pass').value,
+        displayName: $('acc_display').value.trim() || null,
+      },
+    }).then(() => log('register requested', 'ok'))
+      .catch((e) => log(e.message, 'err'));
+
+    $('btnUnregister').onclick = () => api('/unregister', { method: 'POST' })
+      .then(() => { setReg('unregistered'); log('unregistered', 'ok'); })
+      .catch((e) => log(e.message, 'err'));
+
+    $('btnCall').onclick = () => api('/calls', {
+      method: 'POST',
+      body: { target: $('dialTarget').value.trim() },
+    }).catch((e) => log(e.message, 'err'));
+
+    $('btnCallVideo').onclick = () => api('/calls', {
+      method: 'POST',
+      body: { target: $('dialTarget').value.trim(), video: true },
+    }).catch((e) => log(e.message, 'err'));
+
+    $('btnSend').onclick = () => api('/messages', {
+      method: 'POST',
+      body: { target: $('msgTarget').value.trim(), text: $('msgText').value },
+    }).then(() => { $('msgText').value = ''; log('message sent', 'ok'); })
+      .catch((e) => log(e.message, 'err'));
+  </script>
+</body>
+</html>

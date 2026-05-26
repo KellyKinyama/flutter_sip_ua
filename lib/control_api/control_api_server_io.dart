@@ -59,10 +59,7 @@ class ControlApiConfig {
 }
 
 class ControlApiServer {
-  ControlApiServer({
-    required this.ua,
-    this.config = const ControlApiConfig(),
-  });
+  ControlApiServer({required this.ua, this.config = const ControlApiConfig()});
 
   final SipUserAgent ua;
   final ControlApiConfig config;
@@ -84,18 +81,26 @@ class ControlApiServer {
     final server = await HttpServer.bind(addr, config.port, shared: false);
     _server = server;
 
-    _subs.add(ua.registrationStream.listen((s) {
-      _push('registration', {'state': s.name});
-    }));
-    _subs.add(ua.callStream.listen((c) {
-      _push('call', _callJson(c));
-    }));
-    _subs.add(ua.messageStream.listen((m) {
-      _push('message', _messageJson(m));
-    }));
-    _subs.add(ua.logStream.listen((line) {
-      _push('log', {'line': line});
-    }));
+    _subs.add(
+      ua.registrationStream.listen((s) {
+        _push('registration', {'state': s.name});
+      }),
+    );
+    _subs.add(
+      ua.callStream.listen((c) {
+        _push('call', _callJson(c));
+      }),
+    );
+    _subs.add(
+      ua.messageStream.listen((m) {
+        _push('message', _messageJson(m));
+      }),
+    );
+    _subs.add(
+      ua.logStream.listen((line) {
+        _push('log', {'line': line});
+      }),
+    );
 
     server.listen(_handle, onError: (_) {});
   }
@@ -230,11 +235,7 @@ class ControlApiServer {
             final body = await _readJson(req);
             final digit = (body['digit'] as String?) ?? '';
             final ms = (body['durationMs'] as num?)?.toInt() ?? 200;
-            await ua.sendDtmf(
-              id,
-              digit,
-              duration: Duration(milliseconds: ms),
-            );
+            await ua.sendDtmf(id, digit, duration: Duration(milliseconds: ms));
             await _json(req, 200, {'ok': true});
             return;
         }
@@ -345,8 +346,7 @@ class ControlApiServer {
     final header = req.headers.value(HttpHeaders.authorizationHeader);
     if (header != null) {
       final lower = header.toLowerCase();
-      if (lower.startsWith('bearer ') &&
-          header.substring(7).trim() == token) {
+      if (lower.startsWith('bearer ') && header.substring(7).trim() == token) {
         return true;
       }
     }
@@ -399,22 +399,22 @@ class ControlApiServer {
   }
 
   Map<String, dynamic> _callJson(SipCall c) => {
-        'id': c.id,
-        'remoteParty': c.remoteParty,
-        'outgoing': c.outgoing,
-        'state': c.state.name,
-        'held': c.held,
-        'startedAt': c.startedAt?.toIso8601String(),
-        'endedAt': c.endedAt?.toIso8601String(),
-      };
+    'id': c.id,
+    'remoteParty': c.remoteParty,
+    'outgoing': c.outgoing,
+    'state': c.state.name,
+    'held': c.held,
+    'startedAt': c.startedAt?.toIso8601String(),
+    'endedAt': c.endedAt?.toIso8601String(),
+  };
 
   Map<String, dynamic> _messageJson(SipTextMessage m) => {
-        'from': m.from,
-        'to': m.to,
-        'body': m.body,
-        'outgoing': m.outgoing,
-        'receivedAt': m.receivedAt.toIso8601String(),
-      };
+    'from': m.from,
+    'to': m.to,
+    'body': m.body,
+    'outgoing': m.outgoing,
+    'receivedAt': m.receivedAt.toIso8601String(),
+  };
 }
 
 class _SseEvent {

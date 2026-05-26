@@ -36,17 +36,20 @@ final controlApiServerProvider = Provider<ControlApiServer>((ref) {
     // Fire and forget: start asynchronously and log via the UA log stream
     // through stdout for visibility on desktop terminals.
     // ignore: discarded_futures
-    server.start().then((_) {
-      if (kDebugMode) {
-        // ignore: avoid_print
-        print('[control-api] listening on ${server.boundUri}');
-      }
-    }).catchError((e) {
-      if (kDebugMode) {
-        // ignore: avoid_print
-        print('[control-api] failed to start: $e');
-      }
-    });
+    server
+        .start()
+        .then((_) {
+          if (kDebugMode) {
+            // ignore: avoid_print
+            print('[control-api] listening on ${server.boundUri}');
+          }
+        })
+        .catchError((e) {
+          if (kDebugMode) {
+            // ignore: avoid_print
+            print('[control-api] failed to start: $e');
+          }
+        });
   }
   ref.onDispose(() {
     // ignore: discarded_futures

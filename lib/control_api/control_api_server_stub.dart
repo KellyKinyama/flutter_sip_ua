@@ -19,10 +19,7 @@ class ControlApiConfig {
 }
 
 class ControlApiServer {
-  ControlApiServer({
-    required this.ua,
-    this.config = const ControlApiConfig(),
-  });
+  ControlApiServer({required this.ua, this.config = const ControlApiConfig()});
 
   final SipUserAgent ua;
   final ControlApiConfig config;
