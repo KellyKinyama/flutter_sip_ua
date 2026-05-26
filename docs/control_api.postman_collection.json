@@ -1,0 +1,366 @@
+{
+  "info": {
+    "name": "flutter_sip_ua — Control API",
+    "_postman_id": "9b1f4a3e-8c5d-4a1e-9b7c-1f0a4d7f8e21",
+    "description": "REST + SSE control surface exposed by the desktop builds of [flutter_sip_ua](https://github.com/KellyKinyama/flutter_sip_ua). The server auto-starts on Windows / macOS / Linux at `http://127.0.0.1:8765` and wraps the running `SipUserAgent`, letting any HTTP client register an account, place / answer / control calls, send DTMF and SIP MESSAGEs, and subscribe to live events.\n\nSet the collection variables `baseUrl` and (optionally) `token`. If a token is configured in `ControlApiConfig`, every request must carry `Authorization: Bearer {{token}}` (or `?token={{token}}`).\n\nSee `docs/control_api.md` in the repo for the full reference.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8765",
+      "type": "string",
+      "description": "Where the desktop app's control server is listening."
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string",
+      "description": "Bearer token. Leave empty if `ControlApiConfig.token` is null."
+    },
+    {
+      "key": "callId",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by `POST /calls` via a test script, or set manually."
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Strip the Authorization header automatically when no token is set,",
+          "// so the collection works both with and without auth.",
+          "if (!pm.variables.get('token')) {",
+          "  pm.request.headers.remove('Authorization');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Status",
+      "item": [
+        {
+          "name": "GET /status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["status"]
+            },
+            "description": "Returns the current registration state and a snapshot of the active SIP account (no password)."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/status" }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"registration\": \"registered\",\n  \"account\": {\n    \"username\": \"1001\",\n    \"domain\": \"pbx.example.com\",\n    \"serverUri\": \"wss://pbx.example.com:7443\",\n    \"displayName\": null,\n    \"aor\": \"sip:1001@pbx.example.com\",\n    \"sessionExpires\": 1800,\n    \"minSE\": 90\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Account",
+      "item": [
+        {
+          "name": "GET /account",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/account",
+              "host": ["{{baseUrl}}"],
+              "path": ["account"]
+            },
+            "description": "Returns the active SIP account (no password). `{}` if not signed in."
+          }
+        },
+        {
+          "name": "POST /account (register)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serverUri\": \"wss://pbx.example.com:7443\",\n  \"domain\": \"pbx.example.com\",\n  \"username\": \"1001\",\n  \"password\": \"secret\",\n  \"displayName\": null,\n  \"sessionExpires\": 1800,\n  \"minSE\": 90\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/account",
+              "host": ["{{baseUrl}}"],
+              "path": ["account"]
+            },
+            "description": "Starts the SIP user agent with the given account and triggers REGISTER. Replaces any current account.\n\nRequired fields: `serverUri`, `domain`, `username`, `password`. Server URI schemes: `ws://`, `wss://`, `sip:` (UDP)."
+          }
+        },
+        {
+          "name": "POST /unregister",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/unregister",
+              "host": ["{{baseUrl}}"],
+              "path": ["unregister"]
+            },
+            "description": "Sends `REGISTER expires=0` (best effort) and tears down the transport."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Calls",
+      "item": [
+        {
+          "name": "GET /calls",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/calls",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls"]
+            },
+            "description": "Returns a (possibly empty) list of recent calls. For live updates subscribe to `/events`."
+          }
+        },
+        {
+          "name": "POST /calls (make call)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('callId', json.id);",
+                  "  console.log('Saved callId =', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"200\",\n  \"video\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls"]
+            },
+            "description": "Places a call. `target` is an extension (`200`) or a full SIP URI (`sip:200@pbx.example.com`). Set `video: true` for an audio+video offer.\n\nThe returned call's `id` is stored into the `{{callId}}` collection variable by the test script — the per-call endpoints below pick it up automatically."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "url": { "raw": "{{baseUrl}}/calls" }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"9b1e4f7a-…\",\n  \"remoteParty\": \"sip:200@pbx.example.com\",\n  \"outgoing\": true,\n  \"state\": \"outgoingRinging\",\n  \"held\": false,\n  \"startedAt\": \"2026-05-27T10:14:23.001Z\",\n  \"endedAt\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /calls/{id}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}"]
+            },
+            "description": "Snapshot of a single call."
+          }
+        },
+        {
+          "name": "POST /calls/{id}/answer",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/answer",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "answer"]
+            },
+            "description": "Answers an incoming (ringing) call."
+          }
+        },
+        {
+          "name": "POST /calls/{id}/hangup",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/hangup",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "hangup"]
+            },
+            "description": "Hangs up an active call, cancels an outgoing one, or declines an incoming one — depending on the call's current state."
+          }
+        },
+        {
+          "name": "POST /calls/{id}/hold",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hold\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/hold",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "hold"]
+            },
+            "description": "Places the call on hold (`hold: true`) or resumes it (`hold: false`). Sends a re-INVITE with `a=sendonly` / `a=sendrecv`."
+          }
+        },
+        {
+          "name": "POST /calls/{id}/mute",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"muted\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/mute",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "mute"]
+            },
+            "description": "Locally mutes / unmutes the microphone for this call. No re-INVITE — just drops outbound RTP frames."
+          }
+        },
+        {
+          "name": "POST /calls/{id}/dtmf",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"digit\": \"1\",\n  \"durationMs\": 200\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/dtmf",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "dtmf"]
+            },
+            "description": "Sends an RFC 4733 DTMF digit on the active call. Valid digits: `0-9`, `*`, `#`, `A-D`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "item": [
+        {
+          "name": "POST /messages",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"200\",\n  \"text\": \"Hello from the control API!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["messages"]
+            },
+            "description": "Sends a SIP MESSAGE (out-of-dialog) to `target`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Logs & events",
+      "item": [
+        {
+          "name": "GET /logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/logs?limit=100",
+              "host": ["{{baseUrl}}"],
+              "path": ["logs"],
+              "query": [
+                { "key": "limit", "value": "100" }
+              ]
+            },
+            "description": "Returns the most recent log lines. For a live tail, subscribe to `/events` and filter on the `log` event."
+          }
+        },
+        {
+          "name": "GET /events (SSE — open in browser)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/events?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["events"],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "description": "Optional — only required if a bearer token is configured. The token is passed as a query parameter because `EventSource` cannot set custom headers."
+                }
+              ]
+            },
+            "description": "Server-Sent Events stream. Postman buffers the response so this is best opened in a browser or consumed with `curl -N {{baseUrl}}/events`. Event types:\n\n| event          | data shape                                    |\n|----------------|-----------------------------------------------|\n| `registration` | `{ \"state\": \"registered\" }`                   |\n| `call`         | a call object                                 |\n| `message`      | `{ from, to, body, outgoing, receivedAt }`    |\n| `log`          | `{ \"line\": \"...\" }`                           |\n\nA `: ka` keep-alive comment is emitted every 15 s."
+          }
+        }
+      ]
+    }
+  ]
+}

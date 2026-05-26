@@ -130,3 +130,28 @@ curl -N http://127.0.0.1:8765/events
 A self-contained HTML + vanilla-JS console lives at
 [examples/control_api/index.html](../examples/control_api/index.html). Open
 it in any browser while the desktop app is running.
+
+## Postman collection
+
+A Postman v2.1 collection covering every endpoint ships at
+[docs/control_api.postman_collection.json](control_api.postman_collection.json),
+along with a matching environment at
+[docs/control_api.postman_environment.json](control_api.postman_environment.json).
+
+To use it:
+
+1. In Postman, **Import → Files** and pick both JSON files.
+2. Select the **flutter_sip_ua — local desktop** environment in the top-right.
+3. (Optional) Set the `token` variable if you configured one in
+   `ControlApiConfig`. When left empty, the collection automatically drops
+   the `Authorization` header via its pre-request script.
+4. Run **Account → POST /account (register)** to sign in, then
+   **Calls → POST /calls (make call)** — its test script writes the new
+   call's id into the `callId` collection variable so the per-call
+   endpoints (`answer`, `hangup`, `hold`, `mute`, `dtmf`) work without
+   manual copy/paste.
+
+The `GET /events` request is included for completeness, but Postman
+buffers the response — use a browser, `curl -N`, or the example console
+to watch the SSE stream live.
+

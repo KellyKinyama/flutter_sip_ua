@@ -23,9 +23,11 @@ with a Riverpod-driven state layer and a modular widget tree.
   Theme choice is persisted via SharedPreferences and toggled from the sidebar
   toolbar (system → light → dark).
 - **HTTP control API** (desktop only) — drive the running UA from a browser or
-  any HTTP client. See [docs/control_api.md](docs/control_api.md) and the
+  any HTTP client. See [docs/control_api.md](docs/control_api.md), the
   ready-to-open browser console at
-  [examples/control_api/index.html](examples/control_api/index.html).
+  [examples/control_api/index.html](examples/control_api/index.html), and the
+  Postman collection at
+  [docs/control_api.postman_collection.json](docs/control_api.postman_collection.json).
 
 ## Why not `dart-sip-ua` + `flutter_webrtc`?
 
