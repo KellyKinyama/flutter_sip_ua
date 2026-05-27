@@ -359,6 +359,29 @@
             },
             "description": "Server-Sent Events stream. Postman buffers the response so this is best opened in a browser or consumed with `curl -N {{baseUrl}}/events`. Event types:\n\n| event          | data shape                                    |\n|----------------|-----------------------------------------------|\n| `registration` | `{ \"state\": \"registered\" }`                   |\n| `call`         | a call object                                 |\n| `message`      | `{ from, to, body, outgoing, receivedAt }`    |\n| `log`          | `{ \"line\": \"...\" }`                           |\n\nA `: ka` keep-alive comment is emitted every 15 s."
           }
+        },
+        {
+          "name": "GET /ws (WebSocket upgrade — use Postman's WebSocket request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Upgrade", "value": "websocket" },
+              { "key": "Connection", "value": "Upgrade" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ws?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["ws"],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "description": "Optional — append only if a bearer token is configured. Browser `WebSocket` constructors can't set headers, so the query-param form is the portable option."
+                }
+              ]
+            },
+            "description": "WebSocket feed of the same events emitted on `/events`. **This entry is informational** — to actually open the socket in Postman, click *New → WebSocket Request* and use:\n\n```\nws://127.0.0.1:8765/ws\n```\n\n(or `?token=...` if you set one).\n\nFrame format (each message is a single JSON object):\n\n```json\n{ \"event\": \"call\", \"data\": { \"id\": \"...\", \"state\": \"active\", ... } }\n```\n\nThe first frame after upgrade is always a `hello` snapshot:\n\n```json\n{\n  \"event\": \"hello\",\n  \"data\": {\n    \"name\": \"flutter_sip_ua control api\",\n    \"version\": 1,\n    \"status\": { \"registration\": \"registered\", \"account\": { ... } }\n  }\n}\n```\n\nInbound frames are ignored — drive the UA via the REST endpoints above."
+          }
         }
       ]
     }

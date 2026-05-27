@@ -67,8 +67,9 @@ SPA on another origin can call the API directly.
 | POST   | `/calls/{id}/mute`         | `{muted: bool}`                                   | Mute or unmute the mic.                        |
 | POST   | `/calls/{id}/dtmf`         | `{digit, durationMs?}`                            | Send an RFC 4733 DTMF digit.                   |
 | POST   | `/messages`                | `{target, text}`                                  | Send a SIP MESSAGE.                            |
-| GET    | `/logs`                    | —                                                 | Recent log lines (subscribe to `/events` for live tail). |
+| GET    | `/logs`                    | —                                                 | Recent log lines (subscribe to `/events` or `/ws` for a live tail). |
 | GET    | `/events`                  | — (SSE)                                           | Server-Sent Events stream of `registration`, `call`, `message`, `log`. |
+| GET    | `/ws`                      | — (WebSocket upgrade)                             | WebSocket feed of the same events plus an initial `hello` snapshot. |
 
 ### Call object
 
@@ -97,11 +98,45 @@ SPA on another origin can call the API directly.
 
 A `: ka` comment line is emitted every 15 s as a keep-alive.
 
+### WebSocket feed (`/ws`)
+
+For clients that prefer a duplex transport (or need to run somewhere that
+doesn't speak SSE well), `/ws` upgrades the connection to a WebSocket and
+emits the same events — each frame is a JSON envelope:
+
+```json
+{ "event": "call", "data": { "id": "...", "state": "active", ... } }
+```
+
+The first frame after upgrade is always a snapshot so a fresh client
+doesn't need to call `/status` separately:
+
+```json
+{
+  "event": "hello",
+  "data": {
+    "name": "flutter_sip_ua control api",
+    "version": 1,
+    "status": { "registration": "registered", "account": { ... } }
+  }
+}
+```
+
+The server pings every 20 s, so reverse proxies see traffic on idle
+connections. Inbound frames are currently ignored — use the REST
+endpoints to drive the UA.
+
+Auth works the same way as for the REST endpoints: send
+`Authorization: Bearer <token>` on the upgrade request, or append
+`?token=<token>` to the URL (most browser `WebSocket` constructors can't
+set custom headers).
+
 ## Quick smoke test (curl)
 
 ```bash
 # Status
 curl -s http://127.0.0.1:8765/status
+
 
 # Register
 curl -s -X POST http://127.0.0.1:8765/account \
@@ -121,8 +156,11 @@ curl -s -X POST http://127.0.0.1:8765/calls \
 # Hangup
 curl -s -X POST http://127.0.0.1:8765/calls/<id>/hangup
 
-# Live events
+# Live events (SSE)
 curl -N http://127.0.0.1:8765/events
+
+# Live events (WebSocket, via `websocat`)
+websocat ws://127.0.0.1:8765/ws
 ```
 
 ## Browser example

@@ -138,6 +138,11 @@
       <input id="baseUrl" value="http://127.0.0.1:8765" />
       <label>Bearer token (optional)</label>
       <input id="token" placeholder="leave empty if no token" />
+      <label>Live transport</label>
+      <select id="transport">
+        <option value="sse">Server-Sent Events (/events)</option>
+        <option value="ws">WebSocket (/ws)</option>
+      </select>
       <div class="row" style="margin-top:10px">
         <button id="btnConnect">Connect</button>
         <button id="btnDisconnect" class="secondary">Disconnect</button>
@@ -206,6 +211,7 @@
     const $ = (id) => document.getElementById(id);
     const calls = new Map(); // id -> call
     let es = null;
+    let ws = null;
 
     function base() { return $('baseUrl').value.replace(/\/$/, ''); }
     function token() { return $('token').value.trim(); }
@@ -314,36 +320,73 @@
       }[c]));
     }
 
-    // ── SSE connect ──────────────────────────────────────────────────────────
+    // ── Live event feed ──────────────────────────────────────────────────────
     function connect() {
       disconnect();
+      const mode = $('transport').value;
+      if (mode === 'ws') {
+        connectWs();
+      } else {
+        connectSse();
+      }
+    }
+
+    function dispatchEvent(name, data) {
+      switch (name) {
+        case 'hello':
+          if (data.status && data.status.registration) setReg(data.status.registration);
+          log(`hello v${data.version}`, 'ok');
+          break;
+        case 'registration':
+          setReg(data.state);
+          log(`registration: ${data.state}`, 'ev');
+          break;
+        case 'call':
+          calls.set(data.id, data);
+          renderCalls();
+          log(`call ${data.id.slice(0,8)} ${data.state} ${data.remoteParty}`, 'ev');
+          break;
+        case 'message':
+          log(`msg ${data.outgoing ? '→' : '←'} ${data.outgoing ? data.to : data.from}: ${data.body}`, 'ev');
+          break;
+        case 'log':
+          log(data.line);
+          break;
+      }
+    }
+
+    function connectSse() {
       const url = new URL(base() + '/events');
       if (token()) url.searchParams.set('token', token());
       es = new EventSource(url.toString());
-      es.onopen = () => { setStatus('connected', 'ok'); log('SSE connected', 'ok'); refreshStatus(); };
+      es.onopen = () => { setStatus('SSE connected', 'ok'); log('SSE connected', 'ok'); refreshStatus(); };
       es.onerror = () => { setStatus('disconnected', 'bad'); log('SSE error', 'err'); };
-      es.addEventListener('registration', (e) => {
-        const d = JSON.parse(e.data);
-        setReg(d.state);
-        log(`registration: ${d.state}`, 'ev');
-      });
-      es.addEventListener('call', (e) => {
-        const c = JSON.parse(e.data);
-        calls.set(c.id, c);
-        renderCalls();
-        log(`call ${c.id.slice(0,8)} ${c.state} ${c.remoteParty}`, 'ev');
-      });
-      es.addEventListener('message', (e) => {
-        const m = JSON.parse(e.data);
-        log(`msg ${m.outgoing ? '→' : '←'} ${m.outgoing ? m.to : m.from}: ${m.body}`, 'ev');
-      });
-      es.addEventListener('log', (e) => {
-        const d = JSON.parse(e.data);
-        log(d.line);
-      });
+      for (const ev of ['registration', 'call', 'message', 'log']) {
+        es.addEventListener(ev, (e) => dispatchEvent(ev, JSON.parse(e.data)));
+      }
     }
+
+    function connectWs() {
+      const url = new URL(base() + '/ws');
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      if (token()) url.searchParams.set('token', token());
+      ws = new WebSocket(url.toString());
+      ws.onopen    = () => { setStatus('WS connected', 'ok'); log('WS connected', 'ok'); };
+      ws.onerror   = () => { setStatus('disconnected', 'bad'); log('WS error', 'err'); };
+      ws.onclose   = () => { setStatus('disconnected'); log('WS closed'); };
+      ws.onmessage = (e) => {
+        try {
+          const env = JSON.parse(e.data);
+          dispatchEvent(env.event, env.data || {});
+        } catch (err) {
+          log('bad frame: ' + e.data, 'err');
+        }
+      };
+    }
+
     function disconnect() {
       if (es) { es.close(); es = null; }
+      if (ws) { try { ws.close(); } catch {} ws = null; }
       setStatus('disconnected');
     }
 

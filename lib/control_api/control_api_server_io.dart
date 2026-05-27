@@ -67,11 +67,20 @@ class ControlApiServer {
   HttpServer? _server;
   final _eventCtl = StreamController<_SseEvent>.broadcast();
   final List<StreamSubscription<dynamic>> _subs = [];
+  final Set<WebSocket> _sockets = {};
 
   bool get isRunning => _server != null;
   Uri? get boundUri => _server == null
       ? null
       : Uri.parse('http://${_server!.address.host}:${_server!.port}');
+
+  /// URL clients should connect to for the WebSocket event feed.
+  /// `null` while the server isn't running.
+  Uri? get webSocketUri {
+    final base = boundUri;
+    if (base == null) return null;
+    return base.replace(scheme: 'ws', path: '/ws');
+  }
 
   Future<void> start() async {
     if (_server != null) return;
@@ -110,6 +119,12 @@ class ControlApiServer {
       await s.cancel();
     }
     _subs.clear();
+    for (final ws in _sockets.toList()) {
+      try {
+        await ws.close(WebSocketStatus.goingAway, 'server stopping');
+      } catch (_) {}
+    }
+    _sockets.clear();
     await _server?.close(force: true);
     _server = null;
     await _eventCtl.close();
@@ -174,6 +189,9 @@ class ControlApiServer {
           return;
         case 'events':
           await _streamEvents(req);
+          return;
+        case 'ws':
+          await _handleWebSocket(req);
           return;
       }
       await _json(req, 404, {'error': 'not_found', 'path': req.uri.path});
@@ -338,6 +356,53 @@ class ControlApiServer {
   void _push(String event, Map<String, dynamic> data) {
     if (_eventCtl.isClosed) return;
     _eventCtl.add(_SseEvent(event, data));
+    if (_sockets.isEmpty) return;
+    final frame = jsonEncode({'event': event, 'data': data});
+    for (final ws in _sockets.toList()) {
+      try {
+        ws.add(frame);
+      } catch (_) {
+        // Drop the socket on the next protocol error; cleanup happens in
+        // the per-socket onDone handler.
+      }
+    }
+  }
+
+  Future<void> _handleWebSocket(HttpRequest req) async {
+    if (!WebSocketTransformer.isUpgradeRequest(req)) {
+      await _json(req, 426, {'error': 'upgrade_required'});
+      return;
+    }
+    final WebSocket ws;
+    try {
+      ws = await WebSocketTransformer.upgrade(req);
+    } catch (e) {
+      await _json(req, 400, {'error': 'upgrade_failed', 'detail': '$e'});
+      return;
+    }
+    _sockets.add(ws);
+    // Initial snapshot so a fresh client doesn't have to call /status.
+    try {
+      ws.add(jsonEncode({
+        'event': 'hello',
+        'data': {
+          'name': 'flutter_sip_ua control api',
+          'version': 1,
+          'status': _statusJson(),
+        },
+      }));
+    } catch (_) {}
+    ws.pingInterval = const Duration(seconds: 20);
+    ws.listen(
+      (_) {
+        // Inbound frames are currently ignored — this socket is for
+        // server → client events only. Use the REST endpoints to drive
+        // the UA.
+      },
+      onDone: () => _sockets.remove(ws),
+      onError: (_) => _sockets.remove(ws),
+      cancelOnError: true,
+    );
   }
 
   bool _authorize(HttpRequest req) {
