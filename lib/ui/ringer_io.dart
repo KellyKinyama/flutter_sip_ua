@@ -87,9 +87,7 @@ class Ringer {
     } // else: silence (already zero-initialised).
     _elapsedMs += _chunkMs;
     try {
-      FlutterPcmSound.feed(
-        PcmArrayInt16(bytes: pcm.buffer.asByteData()),
-      );
+      FlutterPcmSound.feed(PcmArrayInt16(bytes: pcm.buffer.asByteData()));
     } catch (_) {
       // Drop a frame rather than poison the ring loop.
     }
