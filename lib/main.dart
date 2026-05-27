@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/control_api_provider.dart';
+import 'providers/ringer_provider.dart';
 import 'providers/sip_providers.dart';
 import 'ui/home_page.dart';
 import 'ui/theme.dart';
@@ -28,6 +29,8 @@ class FlutterSipUaApp extends ConsumerWidget {
     // Eagerly create the control API server so its lifetime matches the app.
     // On web / non-desktop platforms this is a no-op stub.
     ref.watch(controlApiServerProvider);
+    // Start the ringer controller so it can react to incoming-INVITE calls.
+    ref.watch(ringerControllerProvider);
     final mode = ref.watch(themeModeProvider);
     return MaterialApp(
       title: 'Dart SIP',
