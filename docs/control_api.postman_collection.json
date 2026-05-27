@@ -292,6 +292,44 @@
             },
             "description": "Sends an RFC 4733 DTMF digit on the active call. Valid digits: `0-9`, `*`, `#`, `A-D`."
           }
+        },
+        {
+          "name": "POST /calls/{id}/transfer (blind)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"300\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/transfer",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "transfer"]
+            },
+            "description": "Blind transfer the active call to `target`. Sends an in-dialog SIP `REFER` (RFC 3515); the peer dials `target` itself and typically ends the original call once the new one is established."
+          }
+        },
+        {
+          "name": "POST /calls/{id}/transfer (attended)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"replaceCallId\": \"<id-of-consultation-call>\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{callId}}/transfer",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{callId}}", "transfer"]
+            },
+            "description": "Attended transfer. Workflow:\n\n1. While call A (`{{callId}}`) is active, place a consultation call B with `POST /calls` and talk to the transfer target.\n2. Save B's id (the test script on **POST /calls (make call)** will overwrite `{{callId}}`, so copy it into `replaceCallId` manually first).\n3. Call this endpoint on A with `{\"replaceCallId\": \"<id-of-B>\"}`. The peer of A is asked (RFC 3891 `Replaces`) to swap its leg with B."
+          }
         }
       ]
     },

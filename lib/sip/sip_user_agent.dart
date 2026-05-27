@@ -574,6 +574,84 @@ class SipUserAgent {
     );
   }
 
+  /// Blind-transfer the active call [callId] to [target] using an
+  /// in-dialog REFER (RFC 3515). The peer should answer `202 Accepted`
+  /// and then drive a new INVITE to [target] on its own; subsequent
+  /// NOTIFY traffic is acknowledged but not surfaced to the UI.
+  ///
+  /// Returns `false` if the call isn't currently active.
+  bool transferBlind(String callId, String target) {
+    final ctx = _calls[callId];
+    final acc = _account;
+    if (ctx == null || acc == null) return false;
+    if (ctx.call.state != CallState.active) return false;
+    final targetUri = _normaliseTarget(target, acc.domain);
+    _sendRefer(
+      ctx: ctx,
+      acc: acc,
+      referTo: '<$targetUri>',
+    );
+    _log('transfer (blind): ${ctx.call.id} -> $targetUri');
+    return true;
+  }
+
+  /// Attended (consultative) transfer: ask the peer of [callId] to
+  /// replace its leg with the already-established consultation call
+  /// [replaceCallId] via RFC 3891 `Replaces`. Both calls must be active
+  /// (typically the consultation call was put on hold first).
+  ///
+  /// Returns `false` if either call isn't active.
+  bool transferAttended(String callId, String replaceCallId) {
+    final ctx = _calls[callId];
+    final replace = _calls[replaceCallId];
+    final acc = _account;
+    if (ctx == null || replace == null || acc == null) return false;
+    if (ctx.call.state != CallState.active) return false;
+    if (replace.call.state != CallState.active) return false;
+    final remoteTag = replace.remoteTag;
+    if (remoteTag == null) return false;
+    final newTarget = replace.remoteContact ?? replace.call.remoteParty;
+    // Replaces parameter goes inside the URI, semicolons must be escaped.
+    final replaces = Uri.encodeComponent(
+      '${replace.call.id};to-tag=$remoteTag;from-tag=${replace.localTag}',
+    );
+    _sendRefer(
+      ctx: ctx,
+      acc: acc,
+      referTo: '<$newTarget?Replaces=$replaces>',
+    );
+    _log(
+      'transfer (attended): $callId replaced by $replaceCallId -> $newTarget',
+    );
+    return true;
+  }
+
+  void _sendRefer({
+    required _CallContext ctx,
+    required SipAccount acc,
+    required String referTo,
+  }) {
+    final cseq = _nextCseq();
+    final dlgTarget = ctx.remoteContact ?? ctx.call.remoteParty;
+    final refer = _buildRequest(
+      method: 'REFER',
+      requestUri: dlgTarget,
+      callId: ctx.call.id,
+      fromTag: ctx.localTag,
+      cseq: cseq,
+      branch: _branch(),
+      target: dlgTarget,
+      account: acc,
+      toTag: ctx.remoteTag,
+      extra: {
+        'Refer-To': referTo,
+        'Referred-By': '<${acc.aor}>',
+      },
+    );
+    ctx.cseq = cseq;
+    _send(refer);
+  }
+
   // ===========================================================================
   // Inbound dispatch
   // ===========================================================================
@@ -753,6 +831,20 @@ class SipUserAgent {
       case 'NOTIFY':
       case 'INFO':
         _send(_buildResponseFor(msg, 200, 'OK'));
+        return;
+      case 'REFER':
+        // Accept the REFER but don't yet drive a new INVITE — the
+        // referrer expects a 202 + NOTIFYs. We acknowledge here so the
+        // dialog stays alive, then emit a log line so API consumers can
+        // react via /events.
+        final ctx = _calls[msg.callId];
+        if (ctx == null) {
+          _send(_buildResponseFor(msg, 481, 'Call/Transaction Does Not Exist'));
+          return;
+        }
+        _send(_buildResponseFor(msg, 202, 'Accepted', addToTag: ctx.localTag));
+        final referTo = msg.header('Refer-To') ?? '';
+        _log('refer: ${ctx.call.id} <- $referTo');
         return;
       default:
         _send(_buildResponseFor(msg, 405, 'Method Not Allowed'));
@@ -1068,7 +1160,7 @@ class SipUserAgent {
       extra: {
         'Expires': '$expires',
         'Allow':
-            'INVITE, ACK, CANCEL, BYE, MESSAGE, OPTIONS, NOTIFY, INFO, UPDATE',
+            'INVITE, ACK, CANCEL, BYE, MESSAGE, OPTIONS, NOTIFY, INFO, UPDATE, REFER',
         'Supported': 'timer, replaces',
       },
     );

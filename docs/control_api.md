@@ -66,10 +66,26 @@ SPA on another origin can call the API directly.
 | POST   | `/calls/{id}/hold`         | `{hold: bool}`                                    | Hold or resume.                                |
 | POST   | `/calls/{id}/mute`         | `{muted: bool}`                                   | Mute or unmute the mic.                        |
 | POST   | `/calls/{id}/dtmf`         | `{digit, durationMs?}`                            | Send an RFC 4733 DTMF digit.                   |
+| POST   | `/calls/{id}/transfer`     | `{target}` *or* `{replaceCallId}`                 | Blind transfer (`target`) or attended transfer (`replaceCallId` = an already-active consultation call). Sends an in-dialog `REFER`. |
 | POST   | `/messages`                | `{target, text}`                                  | Send a SIP MESSAGE.                            |
 | GET    | `/logs`                    | —                                                 | Recent log lines (subscribe to `/events` or `/ws` for a live tail). |
 | GET    | `/events`                  | — (SSE)                                           | Server-Sent Events stream of `registration`, `call`, `message`, `log`. |
 | GET    | `/ws`                      | — (WebSocket upgrade)                             | WebSocket feed of the same events plus an initial `hello` snapshot. |
+
+### Call transfer
+
+`POST /calls/{id}/transfer` sends an in-dialog SIP `REFER` to the peer of
+`{id}`:
+
+- **Blind**: `{"target": "300"}` — the peer accepts (`202`) and dials
+  `300` itself; your call typically ends when the peer hangs up after
+  the new call is established.
+- **Attended**: first place a consultation call with `POST /calls`, then
+  call this endpoint on the *original* call with
+  `{"replaceCallId": "<consultation-call-id>"}`. The peer is asked
+  (RFC 3891 `Replaces`) to swap its leg with the consultation call.
+
+A `409` response means one of the calls isn't currently active.
 
 ### Call object
 

@@ -309,6 +309,27 @@
           add(`DTMF ${d}`,
               () => api(`/calls/${c.id}/dtmf`, { method: 'POST', body: { digit: d } }));
         }
+        add('Blind xfer…', () => {
+          const t = prompt('Blind transfer to (extension or SIP URI):');
+          if (!t) return Promise.resolve();
+          return api(`/calls/${c.id}/transfer`, { method: 'POST', body: { target: t } });
+        });
+        // Attended: pick another active call as the consultation leg.
+        const consults = [...calls.values()]
+          .filter(o => o.state === 'active' && o.id !== c.id);
+        if (consults.length > 0) {
+          add('Attended xfer…', () => {
+            const opts = consults
+              .map((o, i) => `${i + 1}: ${o.remoteParty}`).join('\n');
+            const pick = prompt(`Replace with which active call?\n${opts}`);
+            const idx = parseInt(pick || '', 10) - 1;
+            if (!(idx >= 0 && idx < consults.length)) return Promise.resolve();
+            return api(`/calls/${c.id}/transfer`, {
+              method: 'POST',
+              body: { replaceCallId: consults[idx].id },
+            });
+          });
+        }
       }
       add('Hangup', () => api(`/calls/${c.id}/hangup`, { method: 'POST' }), 'danger');
       return card;

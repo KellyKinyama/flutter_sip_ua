@@ -256,6 +256,33 @@ class ControlApiServer {
             await ua.sendDtmf(id, digit, duration: Duration(milliseconds: ms));
             await _json(req, 200, {'ok': true});
             return;
+          case 'transfer':
+            final body = await _readJson(req);
+            final target = body['target'] as String?;
+            final replaceId = body['replaceCallId'] as String?;
+            if (replaceId != null && replaceId.isNotEmpty) {
+              final ok = ua.transferAttended(id, replaceId);
+              await _json(
+                req,
+                ok ? 200 : 409,
+                {'ok': ok, 'mode': 'attended'},
+              );
+              return;
+            }
+            if (target != null && target.isNotEmpty) {
+              final ok = ua.transferBlind(id, target);
+              await _json(
+                req,
+                ok ? 200 : 409,
+                {'ok': ok, 'mode': 'blind'},
+              );
+              return;
+            }
+            await _json(req, 400, {
+              'error': 'missing_fields',
+              'requireOneOf': ['target', 'replaceCallId'],
+            });
+            return;
         }
       }
     }
@@ -383,14 +410,16 @@ class ControlApiServer {
     _sockets.add(ws);
     // Initial snapshot so a fresh client doesn't have to call /status.
     try {
-      ws.add(jsonEncode({
-        'event': 'hello',
-        'data': {
-          'name': 'flutter_sip_ua control api',
-          'version': 1,
-          'status': _statusJson(),
-        },
-      }));
+      ws.add(
+        jsonEncode({
+          'event': 'hello',
+          'data': {
+            'name': 'flutter_sip_ua control api',
+            'version': 1,
+            'status': _statusJson(),
+          },
+        }),
+      );
     } catch (_) {}
     ws.pingInterval = const Duration(seconds: 20);
     ws.listen(
