@@ -40,6 +40,9 @@ class RtpStats {
   bool _probation = true;
   int _probationCount = 2; // RFC 3550 MIN_SEQUENTIAL = 2
 
+  /// Packets received from the remote side since the call started.
+  int get receivedPackets => _received;
+
   // Jitter (Appendix A.8).
   int _transit = 0;
   double _jitter = 0;

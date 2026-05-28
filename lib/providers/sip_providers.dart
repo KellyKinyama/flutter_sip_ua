@@ -20,9 +20,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../sip/audio/pcm_audio_sink.dart';
 import '../sip/sip_file_logger.dart';
 import '../sip/sip_user_agent.dart';
+import 'audio_sink_picker_stub.dart'
+    if (dart.library.io) 'audio_sink_picker_io.dart'
+    as sink_picker;
 import 'log_path_stub.dart' if (dart.library.io) 'log_path_io.dart' as log_path;
 
 /// Storage key used to persist the SIP account across launches.
@@ -60,7 +62,12 @@ final sipFileLoggerProvider = Provider<SipFileLogger>((ref) {
 final sipUserAgentProvider = Provider<SipUserAgent>((ref) {
   final logger = ref.watch(sipFileLoggerProvider);
   final ua = SipUserAgent(
-    audioSinkFactory: () => PcmAudioSink(),
+    audioSinkFactory: (mediaLog) => sink_picker.pickPlaybackSink(
+      onLog: (line) {
+        mediaLog(line);
+        logger.note(line);
+      },
+    ),
     rtpPacketTap: (flow, summary) => logger.note('rtp ${flow.name} $summary'),
   );
   ua.attachFileLogger(logger);

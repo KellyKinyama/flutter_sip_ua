@@ -4,6 +4,7 @@
 library;
 
 import 'audio_sink.dart';
+import 'rtp_stats.dart';
 import 'rtp_types.dart';
 
 export 'rtp_types.dart';
@@ -25,6 +26,11 @@ class MediaSession {
   }
 
   bool muted = false;
+
+  final RtpStats stats = RtpStats();
+
+  ({int buffered, int played, int lateDrops, int overflowDrops})
+  get jitterStats => (buffered: 0, played: 0, lateDrops: 0, overflowDrops: 0);
 
   int get localPort => 0;
   int get localRtcpPort => 0;

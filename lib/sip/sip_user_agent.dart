@@ -26,7 +26,9 @@ import 'audio/audio_sink.dart';
 import 'audio/media_session_platform.dart';
 import 'digest.dart';
 import 'is_web.dart' if (dart.library.io) 'is_web_io.dart';
+import 'local_ip.dart' if (dart.library.io) 'local_ip_io.dart' as local_ip;
 import 'sdp.dart';
+import 'sdp_log.dart' if (dart.library.io) 'sdp_log_io.dart' as sdp_log;
 import 'sip_file_logger.dart';
 import 'sip_message.dart';
 import 'transport.dart';
@@ -126,7 +128,7 @@ class SipTextMessage {
 class SipUserAgent {
   SipUserAgent({
     Random? rng,
-    AudioSink Function()? audioSinkFactory,
+    AudioSink Function(void Function(String) log)? audioSinkFactory,
     String? publicMediaAddress,
     RtpPacketTap? rtpPacketTap,
   }) : _rng = rng ?? Random.secure(),
@@ -137,7 +139,7 @@ class SipUserAgent {
 
   final Random _rng;
   final DigestClient _digest;
-  final AudioSink Function()? _audioSinkFactory;
+  final AudioSink Function(void Function(String) log)? _audioSinkFactory;
   final _uuid = const Uuid();
 
   /// Optional override for the host advertised in `c=` / `o=` of every
@@ -146,12 +148,24 @@ class SipUserAgent {
   /// When null, falls back to the SIP transport's local host.
   final String? _publicMediaAddress;
 
+  /// Cached non-loopback IPv4 of this host, discovered once the transport
+  /// connects. Used by [_mediaLocalHost] when the transport itself can't
+  /// tell us our local address (the WebSocket transports report the peer's
+  /// host as `localHost`, which would otherwise end up in our SDP).
+  String? _discoveredLocalIp;
+
   /// Optional RTP/RTCP packet tap. See [RtpPacketTap].
   final RtpPacketTap? _rtpPacketTap;
 
   /// Optional sink that records every wire-format SIP message to disk.
   /// Set with [attachFileLogger] before calling [start] for full coverage.
   SipFileLogger? _fileLogger;
+
+  /// Dedicated SDP-only debug log at a fixed path. Opened in [start]
+  /// (truncated each launch) so an out-of-band reader can always find
+  /// the latest negotiation at the same filename — no need to chase a
+  /// new timestamped path every run.
+  sdp_log.SdpLog? _sdpLog;
 
   SipAccount? _account;
   SipTransport? _transport;
@@ -204,12 +218,55 @@ class SipUserAgent {
   Future<void> start(SipAccount account) async {
     await stop();
     _account = account;
+    try {
+      _sdpLog = sdp_log.openSdpLog();
+      final p = _sdpLog?.path;
+      if (p != null) _log('sdp log: writing SDP exchanges to $p');
+    } catch (e) {
+      _log('sdp log: failed to open: $e');
+      _sdpLog = null;
+    }
     final transport = SipTransport.forUri(account.serverUri);
     _transport = transport;
     _stateSub = transport.state.listen(_onTransportState);
     _msgSub = transport.messages.listen(_onMessage);
     await transport.connect();
+    // Resolve a real local IPv4 in the background — used to populate
+    // SDP c=/o= lines for WS/WSS transports that don't know our own host.
+    // ignore: discarded_futures
+    _refreshLocalIp();
     _register(expires: _registrationExpires);
+  }
+
+  Future<void> _refreshLocalIp() async {
+    try {
+      final acc = _account;
+      final u = acc?.serverUri;
+      _sdpLog?.writeln('');
+      _sdpLog?.writeln('--- local IPv4 discovery ---');
+      final ip = await local_ip.discoverLocalIpv4(
+        targetHost: u?.host,
+        targetPort: (u != null && u.hasPort) ? u.port : 0,
+        debug: (line) {
+          _log('media: $line');
+          _sdpLog?.writeln('# $line');
+        },
+      );
+      if (ip != null && ip.isNotEmpty) {
+        _discoveredLocalIp = ip;
+        _log(
+          'media: discovered local IPv4 $ip for SDP c=/o= (route to ${u?.host ?? "?"})',
+        );
+        _sdpLog?.writeln('# media: discovered local IPv4 $ip');
+      } else {
+        _log(
+          'media: WARN could not discover a local IPv4; SDP will use loopback',
+        );
+        _sdpLog?.writeln('# media: WARN no local IPv4 discovered');
+      }
+    } catch (_) {
+      /* best effort */
+    }
   }
 
   Future<void> stop() async {
@@ -233,6 +290,13 @@ class SipUserAgent {
     _msgSub = null;
     _stateSub = null;
     _transport = null;
+    final sdpLog = _sdpLog;
+    _sdpLog = null;
+    if (sdpLog != null) {
+      try {
+        await sdpLog.close();
+      } catch (_) {}
+    }
     _setRegState(RegistrationState.unregistered);
   }
 
@@ -264,7 +328,7 @@ class SipUserAgent {
 
     // Bind a local RTP port and put it in our SDP offer.
     final media = MediaSession(
-      sink: _audioSinkFactory?.call(),
+      sink: _audioSinkFactory?.call(_mediaLogSink),
       packetTap: _rtpPacketTap,
     );
     final rtpPort = await media.bindLocalPort();
@@ -434,7 +498,7 @@ class SipUserAgent {
 
     // Bind RTP socket and parse the peer's offer so we know where to send.
     final media = MediaSession(
-      sink: _audioSinkFactory?.call(),
+      sink: _audioSinkFactory?.call(_mediaLogSink),
       packetTap: _rtpPacketTap,
     );
     final rtpPort = await media.bindLocalPort();
@@ -511,7 +575,14 @@ class SipUserAgent {
     _armSessionTimers(ctx);
     if (remoteAudio != null) {
       try {
-        await media.start(remoteAudio.toEndpoint());
+        final ep = remoteAudio.toEndpoint();
+        final line =
+            'media(answer): localRtp=${_mediaLocalHost()}:$rtpPort '
+            '-> remoteRtp=${ep.host}:${ep.port} codec=${ep.codec.name}';
+        _log(line);
+        _sdpLog?.writeln('# $line');
+        await media.start(ep);
+        _startRtpStatsLogger(ctx);
       } catch (e) {
         _log('media: failed to start: $e');
       }
@@ -668,6 +739,7 @@ class SipUserAgent {
     _log(
       '<-- ${msg.isResponse ? "${msg.statusCode} ${msg.reasonPhrase}" : "${msg.method} ${msg.requestUri}"}',
     );
+    _logSdpIfPresent('IN', msg);
     if (msg.isResponse) {
       // Surface the server's reason on failure so the user/dev can read why
       // a call was rejected (e.g. Asterisk's 488 'SDP not acceptable').
@@ -729,9 +801,16 @@ class SipUserAgent {
           }
           final media = ctx.media;
           if (media != null && remoteAudio != null) {
-            media.start(remoteAudio.toEndpoint()).catchError((e) {
+            final ep = remoteAudio.toEndpoint();
+            final line =
+                'media(invite-200): localRtp=${_mediaLocalHost()}:${media.localPort} '
+                '-> remoteRtp=${ep.host}:${ep.port} codec=${ep.codec.name}';
+            _log(line);
+            _sdpLog?.writeln('# $line');
+            media.start(ep).catchError((e) {
               _log('media: failed to start: $e');
             });
+            _startRtpStatsLogger(ctx);
           }
           final video = ctx.video;
           if (video != null && remoteVideo != null) {
@@ -1535,16 +1614,61 @@ class SipUserAgent {
     final override = _publicMediaAddress?.trim();
     if (override != null && override.isNotEmpty) return override;
     final tx = _transport;
-    if (tx == null) return '127.0.0.1';
+    // WebSocket transports report the *remote* host as `localHost`
+    // (it's just `uri.host`). Using that in SDP makes the PBX send RTP
+    // back to itself, which is why early calls were dead silent. Prefer
+    // a discovered local IPv4 whenever the transport is WS/WSS, or when
+    // the transport's host is unspecified.
+    final discovered = _discoveredLocalIp;
+    if (tx == null) return discovered ?? '127.0.0.1';
+    final proto = tx.protocol.toUpperCase();
+    if (proto == 'WS' || proto == 'WSS') {
+      if (discovered != null && discovered.isNotEmpty) return discovered;
+      _log(
+        'sdp: WS/WSS transport has no usable local IP; falling back to 127.0.0.1 '
+        '— set publicMediaAddress for real deployments',
+      );
+      return '127.0.0.1';
+    }
     final h = tx.localHost;
     if (h.isEmpty || h == '0.0.0.0' || h == '::') {
+      if (discovered != null && discovered.isNotEmpty) return discovered;
       _log(
         'sdp: transport local host is unspecified ($h); '
         'falling back to 127.0.0.1 — set publicMediaAddress for real deployments',
       );
       return '127.0.0.1';
     }
+    // The UDP socket on Windows often binds to a virtual adapter
+    // (e.g. VirtualBox host-only 192.168.56.x) even when the real LAN
+    // NIC is reachable. If we have a discovered IP that looks more like
+    // a real LAN address than the transport's, prefer it.
+    if (discovered != null && discovered.isNotEmpty && discovered != h) {
+      if (_isVirtualLikeIp(h) && !_isVirtualLikeIp(discovered)) {
+        _log(
+          'sdp: transport local host $h looks virtual; using discovered $discovered for SDP',
+        );
+        _sdpLog?.writeln(
+          '# sdp: overriding transport host $h with discovered $discovered',
+        );
+        return discovered;
+      }
+    }
     return h;
+  }
+
+  /// True for IPs in subnets that are essentially always synthetic on
+  /// developer Windows boxes (VirtualBox host-only, APIPA).
+  static bool _isVirtualLikeIp(String ipv4) {
+    final parts = ipv4.split('.');
+    if (parts.length != 4) return false;
+    final a = int.tryParse(parts[0]);
+    final b = int.tryParse(parts[1]);
+    final c = int.tryParse(parts[2]);
+    if (a == null || b == null || c == null) return false;
+    if (a == 192 && b == 168 && c == 56) return true;
+    if (a == 169 && b == 254) return true;
+    return false;
   }
 
   String? _firstContactUri(SipMessage msg) {
@@ -1573,7 +1697,55 @@ class SipUserAgent {
     _log(
       '--> ${msg.isResponse ? "${msg.statusCode} ${msg.reasonPhrase}" : "${msg.method} ${msg.requestUri}"}',
     );
+    _logSdpIfPresent('OUT', msg);
     _transport?.send(msg);
+  }
+
+  /// Emit a concise summary plus the verbatim SDP body to the in-memory
+  /// log stream whenever [msg] carries `application/sdp`. The wire-format
+  /// file logger already captures the full message; this duplicates the
+  /// SDP onto the UI/event log so call setup can be diagnosed without
+  /// opening the wire file.
+  void _logSdpIfPresent(String direction, SipMessage msg) {
+    final body = msg.body;
+    if (body.isEmpty) return;
+    final ct = (msg.header('Content-Type') ?? msg.header('c') ?? '').trim();
+    if (!ct.toLowerCase().contains('application/sdp')) return;
+
+    // One-liner summary that's easy to grep for.
+    String summary;
+    try {
+      final parsed = parseSdp(body);
+      final a = parsed.audio;
+      final v = parsed.video;
+      final parts = <String>[];
+      if (a != null) {
+        parts.add(
+          'audio=${a.host}:${a.port} codec=${a.codec.name} dir=${a.direction.name}',
+        );
+      }
+      if (v != null) {
+        parts.add('video=${v.host}:${v.port} pt=${v.payloadType}');
+      }
+      summary = parts.isEmpty ? 'no m= lines parsed' : parts.join(' | ');
+    } catch (e) {
+      summary = 'parse error: $e';
+    }
+    _log('sdp($direction): $summary');
+    _sdpLog?.writeln('');
+    _sdpLog?.writeln(
+      '===== ${DateTime.now().toIso8601String()}  $direction  '
+      '${msg.isResponse ? "${msg.statusCode} ${msg.reasonPhrase}" : "${msg.method} ${msg.requestUri}"}  '
+      'Call-ID=${msg.callId ?? "?"}  CSeq=${msg.cseqMethod ?? "?"} =====',
+    );
+    _sdpLog?.writeln('# summary: $summary');
+    for (final line in body.split(RegExp(r'\r?\n'))) {
+      final t = line.trimRight();
+      if (t.isNotEmpty) {
+        _log('  sdp($direction)| $t');
+        _sdpLog?.writeln(t);
+      }
+    }
   }
 
   void _markEnded(_CallContext ctx) {
@@ -1603,6 +1775,40 @@ class SipUserAgent {
   }
 
   void _log(String line) => _logCtl.add(line);
+
+  /// Sink passed to media-layer components (audio sink, etc.) so their
+  /// diagnostics land in both the wire log and the SDP log.
+  void _mediaLogSink(String line) {
+    _log(line);
+    _sdpLog?.writeln('# $line');
+  }
+
+  /// Start a 2-second periodic logger that writes RTP send/receive counts
+  /// for [ctx] into the SDP log file. Lets us tell, after a test call,
+  /// whether packets actually flowed in either direction.
+  void _startRtpStatsLogger(_CallContext ctx) {
+    ctx.rtpStatsTimer?.cancel();
+    final start = DateTime.now();
+    ctx.rtpStatsTimer = Timer.periodic(const Duration(seconds: 2), (t) {
+      final media = ctx.media;
+      if (media == null || ctx.call.state != CallState.active) {
+        t.cancel();
+        return;
+      }
+      final s = media.stats;
+      final js = media.jitterStats;
+      final elapsed = DateTime.now().difference(start).inSeconds;
+      final line =
+          'rtp[t+${elapsed}s] call=${ctx.call.id} '
+          'tx=${s.sentPackets} rx=${s.receivedPackets} '
+          'played=${js.played} buffered=${js.buffered} '
+          'lateDrops=${js.lateDrops} overflow=${js.overflowDrops} '
+          'remoteSsrc=${s.remoteSsrc ?? "?"} '
+          'jitter=${s.jitter} lost=${s.cumulativeLost}';
+      _log(line);
+      _sdpLog?.writeln('# $line');
+    });
+  }
 }
 
 class _CallContext {
@@ -1667,12 +1873,15 @@ class _CallContext {
   String? refresher; // 'uac' | 'uas'
   Timer? refreshTimer;
   Timer? expiryTimer;
+  Timer? rtpStatsTimer;
 
   void cancelTimers() {
     refreshTimer?.cancel();
     refreshTimer = null;
     expiryTimer?.cancel();
     expiryTimer = null;
+    rtpStatsTimer?.cancel();
+    rtpStatsTimer = null;
   }
 }
 

@@ -46,6 +46,7 @@ dependencies:
   permission_handler: ^11.3.1  # RECORD_AUDIO runtime permission
   record: ^6.2.0
   flutter_pcm_sound: ^3.3.3
+  ffi: ^2.1.0                  # Windows playback via winmm.dll waveOut*
   flutter_riverpod: ^3.3.1
 
   # Optional native-only RTP-over-QUIC side channel (WebTransport
