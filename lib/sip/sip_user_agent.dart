@@ -586,11 +586,7 @@ class SipUserAgent {
     if (ctx == null || acc == null) return false;
     if (ctx.call.state != CallState.active) return false;
     final targetUri = _normaliseTarget(target, acc.domain);
-    _sendRefer(
-      ctx: ctx,
-      acc: acc,
-      referTo: '<$targetUri>',
-    );
+    _sendRefer(ctx: ctx, acc: acc, referTo: '<$targetUri>');
     _log('transfer (blind): ${ctx.call.id} -> $targetUri');
     return true;
   }
@@ -615,11 +611,7 @@ class SipUserAgent {
     final replaces = Uri.encodeComponent(
       '${replace.call.id};to-tag=$remoteTag;from-tag=${replace.localTag}',
     );
-    _sendRefer(
-      ctx: ctx,
-      acc: acc,
-      referTo: '<$newTarget?Replaces=$replaces>',
-    );
+    _sendRefer(ctx: ctx, acc: acc, referTo: '<$newTarget?Replaces=$replaces>');
     _log(
       'transfer (attended): $callId replaced by $replaceCallId -> $newTarget',
     );
@@ -643,10 +635,7 @@ class SipUserAgent {
       target: dlgTarget,
       account: acc,
       toTag: ctx.remoteTag,
-      extra: {
-        'Refer-To': referTo,
-        'Referred-By': '<${acc.aor}>',
-      },
+      extra: {'Refer-To': referTo, 'Referred-By': '<${acc.aor}>'},
     );
     ctx.cseq = cseq;
     _send(refer);

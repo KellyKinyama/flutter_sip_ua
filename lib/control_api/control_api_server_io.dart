@@ -58,11 +58,33 @@ class ControlApiConfig {
   final bool enabled;
 }
 
+/// Called after a successful `POST /account` so the embedder can persist
+/// the credentials and / or sync app-level state (e.g. Riverpod notifiers).
+typedef AccountSetHook = FutureOr<void> Function(SipAccount account);
+
+/// Called after a successful `POST /unregister` so the embedder can clear
+/// persisted credentials and / or reset app-level state.
+typedef AccountClearedHook = FutureOr<void> Function();
+
 class ControlApiServer {
-  ControlApiServer({required this.ua, this.config = const ControlApiConfig()});
+  ControlApiServer({
+    required this.ua,
+    this.config = const ControlApiConfig(),
+    this.onAccountSet,
+    this.onAccountCleared,
+  });
 
   final SipUserAgent ua;
   final ControlApiConfig config;
+
+  /// Invoked after `POST /account` brings the UA up with new credentials.
+  /// Use this to persist the account (e.g. SharedPreferences) and mirror
+  /// the change into app state.
+  final AccountSetHook? onAccountSet;
+
+  /// Invoked after `POST /unregister` stops the UA. Use this to wipe any
+  /// persisted credentials and reset app state.
+  final AccountClearedHook? onAccountCleared;
 
   HttpServer? _server;
   final _eventCtl = StreamController<_SseEvent>.broadcast();
@@ -171,6 +193,11 @@ class ControlApiServer {
         case 'unregister':
           if (req.method == 'POST') {
             await ua.stop();
+            try {
+              await onAccountCleared?.call();
+            } catch (_) {
+              // see note on onAccountSet — hook failures must not 500.
+            }
             await _json(req, 200, {'ok': true});
             return;
           }
@@ -262,20 +289,12 @@ class ControlApiServer {
             final replaceId = body['replaceCallId'] as String?;
             if (replaceId != null && replaceId.isNotEmpty) {
               final ok = ua.transferAttended(id, replaceId);
-              await _json(
-                req,
-                ok ? 200 : 409,
-                {'ok': ok, 'mode': 'attended'},
-              );
+              await _json(req, ok ? 200 : 409, {'ok': ok, 'mode': 'attended'});
               return;
             }
             if (target != null && target.isNotEmpty) {
               final ok = ua.transferBlind(id, target);
-              await _json(
-                req,
-                ok ? 200 : 409,
-                {'ok': ok, 'mode': 'blind'},
-              );
+              await _json(req, ok ? 200 : 409, {'ok': ok, 'mode': 'blind'});
               return;
             }
             await _json(req, 400, {
@@ -315,6 +334,12 @@ class ControlApiServer {
       minSE: (body['minSE'] as num?)?.toInt() ?? 90,
     );
     await ua.start(acc);
+    try {
+      await onAccountSet?.call(acc);
+    } catch (_) {
+      // Persistence is best-effort: never fail the request because the
+      // embedder's hook threw.
+    }
     await _json(req, 200, {'ok': true, 'aor': acc.aor});
   }
 

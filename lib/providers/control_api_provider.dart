@@ -31,7 +31,21 @@ final controlApiEnabledProvider = Provider<bool>((ref) {
 final controlApiServerProvider = Provider<ControlApiServer>((ref) {
   final ua = ref.watch(sipUserAgentProvider);
   final config = ref.watch(controlApiConfigProvider);
-  final server = ControlApiServer(ua: ua, config: config);
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final server = ControlApiServer(
+    ua: ua,
+    config: config,
+    // Mirror REST-driven credential changes into persisted prefs + the
+    // accountProvider so the UI reflects them and they survive restart.
+    onAccountSet: (acc) async {
+      await persistAccount(prefs, acc);
+      ref.read(accountProvider.notifier).set(acc);
+    },
+    onAccountCleared: () async {
+      await clearPersistedAccount(prefs);
+      ref.read(accountProvider.notifier).set(null);
+    },
+  );
   if (ref.watch(controlApiEnabledProvider)) {
     // Fire and forget: start asynchronously and log via the UA log stream
     // through stdout for visibility on desktop terminals.

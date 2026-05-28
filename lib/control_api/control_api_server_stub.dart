@@ -3,6 +3,8 @@
 /// and exposing a browser to localhost wouldn't serve the use case.
 library;
 
+import 'dart:async';
+
 import '../sip/sip_user_agent.dart';
 
 class ControlApiConfig {
@@ -18,11 +20,21 @@ class ControlApiConfig {
   final bool enabled;
 }
 
+typedef AccountSetHook = FutureOr<void> Function(SipAccount account);
+typedef AccountClearedHook = FutureOr<void> Function();
+
 class ControlApiServer {
-  ControlApiServer({required this.ua, this.config = const ControlApiConfig()});
+  ControlApiServer({
+    required this.ua,
+    this.config = const ControlApiConfig(),
+    this.onAccountSet,
+    this.onAccountCleared,
+  });
 
   final SipUserAgent ua;
   final ControlApiConfig config;
+  final AccountSetHook? onAccountSet;
+  final AccountClearedHook? onAccountCleared;
 
   bool get isRunning => false;
   Uri? get boundUri => null;

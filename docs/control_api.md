@@ -56,8 +56,8 @@ SPA on another origin can call the API directly.
 |-------:|----------------------------|---------------------------------------------------|------------------------------------------------|
 | GET    | `/status`                  | —                                                 | Registration state + current account snapshot. |
 | GET    | `/account`                 | —                                                 | Active account (no password).                  |
-| POST   | `/account`                 | `{serverUri, domain, username, password, displayName?, sessionExpires?, minSE?}` | Start UA + register. |
-| POST   | `/unregister`              | —                                                 | Stop UA / sign out.                            |
+| POST   | `/account`                 | `{serverUri, domain, username, password, displayName?, sessionExpires?, minSE?}` | Start UA + register. Persisted to `SharedPreferences`, so the agent re-registers automatically after restart. |
+| POST   | `/unregister`              | —                                                 | Stop UA / sign out. Also clears the persisted credentials.            |
 | GET    | `/calls`                   | —                                                 | List of recent calls (see notes below).        |
 | POST   | `/calls`                   | `{target, video?}`                                | Place a call. Returns the new call snapshot.   |
 | GET    | `/calls/{id}`              | —                                                 | Snapshot of a single call.                     |
