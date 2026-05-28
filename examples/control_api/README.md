@@ -37,3 +37,34 @@ REST calls and as `?token=…` on the SSE subscription (the browser
 
 The whole client is ~250 lines in [index.html](./index.html); copy it
 into your own SPA as a starting point.
+
+## WebSocket version
+
+If you'd rather use the duplex `/ws` feed (lower latency, no SSE
+buffering issues behind some proxies), see:
+
+- [control-api-client.js](./control-api-client.js) — a small,
+  dependency-free ES module that opens the WebSocket, maintains a
+  reactive `state` (`{ connected, registration, account, calls, messages }`),
+  auto-reconnects with backoff, and exposes thin REST helpers
+  (`register`, `placeCall`, `answer`, `hangup`, `hold`, `mute`, `dtmf`,
+  `transferBlind`, `sendMessage`, …).
+- [ws-demo.html](./ws-demo.html) — a single-page console that imports
+  the module and re-renders the entire UI off the client's `change`
+  event whenever a WS frame arrives.
+
+Quick taste:
+
+```js
+import { ControlApiClient } from './control-api-client.js';
+
+const api = new ControlApiClient({ baseUrl: 'http://127.0.0.1:8765' });
+api.on('change', (state) => {
+  console.log('registration:', state.registration);
+  console.log('live calls:',   api.liveCalls());
+});
+api.connect();
+
+await api.register({ serverUri, domain, username, password });
+await api.placeCall('200');
+```
