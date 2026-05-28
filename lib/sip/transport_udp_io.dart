@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'local_ip_io.dart' show IfaceAddr, pickBestIpv4;
 import 'sip_message.dart';
 import 'transport.dart';
 
@@ -90,9 +91,12 @@ class SipUdpTransport implements SipTransport {
   }
 
   /// Pick a usable local IPv4 to advertise in Via/Contact. When the remote
-  /// is loopback we must reply on loopback as well; otherwise fall back to
-  /// the first non-loopback IPv4 interface (best-effort — no route table
-  /// access from pure Dart).
+  /// is loopback we must reply on loopback as well; otherwise use the
+  /// shared [pickBestIpv4] picker so we prefer a real LAN NIC (e.g. the
+  /// 10.x WLAN) over synthetic adapters like VirtualBox host-only
+  /// (192.168.56.x), Hyper-V vEthernet, Docker, WSL, etc. Otherwise
+  /// Asterisk records the virtual address in `pjsip show aor` and can
+  /// never reach the endpoint.
   static Future<String> _discoverLocalAddress(InternetAddress remote) async {
     if (remote.isLoopback) return remote.address;
     try {
@@ -101,13 +105,14 @@ class SipUdpTransport implements SipTransport {
         includeLinkLocal: false,
         type: InternetAddressType.IPv4,
       );
-      for (final iface in ifaces) {
-        for (final a in iface.addresses) {
-          if (a.type == InternetAddressType.IPv4 && !a.isLoopback) {
-            return a.address;
-          }
-        }
-      }
+      final flat = <IfaceAddr>[
+        for (final iface in ifaces)
+          for (final a in iface.addresses)
+            if (a.type == InternetAddressType.IPv4 && !a.isLoopback)
+              IfaceAddr(iface.name, a.address),
+      ];
+      final picked = pickBestIpv4(flat, targetIp: remote.address);
+      if (picked != null && picked.isNotEmpty) return picked;
     } catch (_) {
       /* fall through */
     }
