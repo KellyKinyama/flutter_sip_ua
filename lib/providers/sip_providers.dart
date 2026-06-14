@@ -65,7 +65,6 @@ final sipUserAgentProvider = Provider<SipUserAgent>((ref) {
   );
   ua.attachFileLogger(logger);
   ref.onDispose(() {
-    // Best-effort: unregister + close transport.
     ua.stop();
   });
   return ua;

@@ -64,10 +64,10 @@ class _LoginPageState extends State<LoginPage> {
     });
     try {
       final uri = Uri.parse(_serverUri.text.trim());
-      const allowed = {'ws', 'wss', 'sip'};
+      const allowed = {'ws', 'wss', 'sip', 'sips'};
       if (!allowed.contains(uri.scheme.toLowerCase())) {
         throw const FormatException(
-          'Server URI must start with ws://, wss:// or sip:',
+          'Server URI must start with ws://, wss://, sip: or sips:',
         );
       }
       final account = SipAccount(
@@ -157,7 +157,7 @@ class _LoginPageState extends State<LoginPage> {
                               labelText: 'Server URI',
                               prefixIcon: Icon(Icons.dns_outlined),
                               helperText:
-                                  'ws://host:8088 · wss://host:8089 · sip:host:5060',
+                                  'ws://host · wss://host · sip:host;transport=tcp · sip:host;transport=tls · sips:host',
                             ),
                             validator: (v) => (v == null || v.trim().isEmpty)
                                 ? 'Required'

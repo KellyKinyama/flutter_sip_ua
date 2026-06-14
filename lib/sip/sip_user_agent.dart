@@ -160,6 +160,9 @@ class SipUserAgent {
   Timer? _registerTimer;
   Timer? _keepAliveTimer;
 
+  // Active UDP retransmitters keyed by Via branch value.
+  final Map<String, _Retransmitter> _retransmits = {};
+
   // Registration bookkeeping.
   String? _regCallId;
   String _regFromTag = '';
@@ -217,6 +220,8 @@ class SipUserAgent {
     _registerTimer = null;
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
+    for (final r in _retransmits.values) r.cancel();
+    _retransmits.clear();
     for (final ctx in _calls.values.toList()) {
       ctx.cancelTimers();
     }
@@ -409,6 +414,8 @@ class SipUserAgent {
         target: ctx.remoteContact ?? ctx.call.remoteParty,
         account: acc,
         toTag: ctx.remoteTag,
+        toDialogUri: ctx.call.remoteParty,
+        routeSet: ctx.routeSet,
       );
       _send(bye);
     }
@@ -601,6 +608,11 @@ class SipUserAgent {
     _log(
       '<-- ${msg.isResponse ? "${msg.statusCode} ${msg.reasonPhrase}" : "${msg.method} ${msg.requestUri}"}',
     );
+    // RFC 3261 §17.1: cancel UDP retransmitter on first response.
+    if (msg.isResponse) {
+      final branch = _extractBranch(msg.header('Via') ?? '');
+      if (branch != null) _retransmits.remove(branch)?.cancel();
+    }
     if (msg.isResponse) {
       // Surface the server's reason on failure so the user/dev can read why
       // a call was rejected (e.g. Asterisk's 488 'SDP not acceptable').
@@ -644,6 +656,11 @@ class SipUserAgent {
         }
       } else if (code >= 200 && code < 300) {
         ctx.remoteContact = _firstContactUri(msg) ?? ctx.remoteContact;
+        // RFC 3261 §12.1.2: route set = Record-Route from 2xx, reversed.
+        final rr = msg.headersAll('Record-Route');
+        if (rr.isNotEmpty) {
+          ctx.routeSet = rr.reversed.map(extractUri).toList();
+        }
         _absorbSessionExpires(ctx, msg, weAreUac: true);
         _sendAck(ctx, msg);
         final wasRefresh = ctx.call.state == CallState.active;
@@ -858,6 +875,9 @@ class SipUserAgent {
     ctx.refresher = refresher;
     ctx.remoteTag = msg.fromTag;
     ctx.remoteContact = _firstContactUri(msg);
+    // RFC 3261 §12.1.1: UAS route set = Record-Route in forward order.
+    final rrUas = msg.headersAll('Record-Route');
+    if (rrUas.isNotEmpty) ctx.routeSet = rrUas.map(extractUri).toList();
     _calls[callId] = ctx;
     _emitCall(ctx.call);
   }
@@ -949,6 +969,8 @@ class SipUserAgent {
       target: target,
       account: acc,
       toTag: ctx.remoteTag,
+      toDialogUri: ctx.call.remoteParty,
+      routeSet: ctx.routeSet,
       extra: extra,
       body: _buildOfferSdpForCall(ctx, acc),
     );
@@ -985,6 +1007,8 @@ class SipUserAgent {
       target: target,
       account: acc,
       toTag: ctx.remoteTag,
+      toDialogUri: ctx.call.remoteParty,
+      routeSet: ctx.routeSet,
       extra: extra,
       body: _buildOfferSdpForCall(ctx, acc),
     );
@@ -1148,17 +1172,44 @@ class SipUserAgent {
     required String target,
     required SipAccount account,
     String? toTag,
+    // RFC 3261 §12: dialog To URI (may differ from requestUri for in-dialog
+    // requests where requestUri = remote Contact and To = original AOR).
+    String? toDialogUri,
+    // RFC 3261 §12.1.2: route set built from Record-Route (already reversed).
+    List<String> routeSet = const [],
     Map<String, String>? extra,
     String body = '',
   }) {
     final tx = _transport!;
-    final scheme = tx.protocol; // WS / WSS / UDP
+    final scheme = tx.protocol;
     final localHost = _localContactHost();
-    final fromDisplay = account.displayName == null
-        ? ''
-        : '"${account.displayName}" ';
-    final toUri = method == 'REGISTER' ? account.aor : target;
+    final fromDisplay =
+        account.displayName == null ? '' : '"${account.displayName}" ';
+    final toUri =
+        method == 'REGISTER' ? account.aor : (toDialogUri ?? target);
     final toLine = toTag == null ? '<$toUri>' : '<$toUri>;tag=$toTag';
+
+    // RFC 3261 §12.2.1.1: apply route set.
+    // Loose routing (;lr in first route): requestUri stays as remote target,
+    // all routes go into Route headers.
+    // Strict routing (no ;lr): requestUri = first route, remaining routes +
+    // remote target appended as Route headers.
+    final effectiveRequestUri;
+    final routeHeaders = <String>[];
+    if (routeSet.isNotEmpty) {
+      final first = routeSet.first;
+      if (first.contains(';lr')) {
+        effectiveRequestUri = requestUri;
+        routeHeaders.addAll(routeSet);
+      } else {
+        effectiveRequestUri = first;
+        routeHeaders.addAll(routeSet.skip(1));
+        routeHeaders.add(requestUri);
+      }
+    } else {
+      effectiveRequestUri = requestUri;
+    }
+
     final headers = <MapEntry<String, String>>[
       MapEntry('Via', 'SIP/2.0/$scheme $localHost;branch=$branch;rport'),
       MapEntry('Max-Forwards', '70'),
@@ -1172,10 +1223,18 @@ class SipUserAgent {
       ),
       const MapEntry('User-Agent', 'flutter_sip_ua/1.0 (pure-dart)'),
     ];
+    for (final r in routeHeaders) {
+      headers.add(MapEntry('Route', '<$r>'));
+    }
     if (extra != null) {
       extra.forEach((k, v) => headers.add(MapEntry(k, v)));
     }
-    return SipMessage.request(method, requestUri, headers: headers, body: body);
+    return SipMessage.request(
+      method,
+      effectiveRequestUri,
+      headers: headers,
+      body: body,
+    );
   }
 
   SipMessage _buildResponseFor(
@@ -1257,20 +1316,22 @@ class SipUserAgent {
     // INVITE *server* transaction and MUST reuse the INVITE's branch and
     // Request-URI. RFC 3261 §13.2.2.4: ACK to a 2xx is a new transaction,
     // gets a fresh branch, and is sent to the remote target (Contact).
-    final target = isTwoXx
+    final remoteTarget = isTwoXx
         ? (ctx.remoteContact ?? ctx.call.remoteParty)
         : ctx.call.remoteParty;
     final branch = isTwoXx ? _branch() : ctx.branch;
     final ack = _buildRequest(
       method: 'ACK',
-      requestUri: target,
+      requestUri: remoteTarget,
       callId: ctx.call.id,
       fromTag: ctx.localTag,
       cseq: ctx.cseq,
       branch: branch,
-      target: target,
+      target: remoteTarget,
       account: acc,
       toTag: resp.toTag ?? ctx.remoteTag,
+      toDialogUri: ctx.call.remoteParty,
+      routeSet: isTwoXx ? ctx.routeSet : const [],
     );
     _send(ack);
   }
@@ -1492,7 +1553,31 @@ class SipUserAgent {
     _log(
       '--> ${msg.isResponse ? "${msg.statusCode} ${msg.reasonPhrase}" : "${msg.method} ${msg.requestUri}"}',
     );
-    _transport?.send(msg);
+    final tx = _transport;
+    if (tx == null) return;
+    tx.send(msg);
+    // RFC 3261 §17: retransmission only applies to UDP (TCP/TLS is reliable).
+    // ACK and responses are never retransmitted by the client.
+    if (tx.protocol == 'UDP' && msg.isRequest && msg.method != 'ACK') {
+      final branch = _extractBranch(msg.header('Via') ?? '');
+      if (branch != null) {
+        _retransmits[branch]?.cancel();
+        _retransmits[branch] = _Retransmitter(
+          raw: msg.encode(),
+          sender: (raw) => tx.sendRaw(raw),
+          isInvite: msg.method == 'INVITE',
+          onTimeout: () {
+            _retransmits.remove(branch);
+          },
+        );
+      }
+    }
+  }
+
+  static String? _extractBranch(String viaHeader) {
+    final m = RegExp(r'branch=([^\s;,>]+)', caseSensitive: false)
+        .firstMatch(viaHeader);
+    return m?.group(1);
   }
 
   void _markEnded(_CallContext ctx) {
@@ -1543,6 +1628,12 @@ class _CallContext {
   final String localTag;
   String? remoteTag;
   String? remoteContact;
+
+  /// Route set for in-dialog requests, built from Record-Route in the
+  /// 200 OK (reversed, per RFC 3261 §12.1.2). Each entry is a bare URI
+  /// suitable for a Route header value.
+  List<String> routeSet = [];
+
   int cseq;
   String branch;
   SipMessage lastInvite;
@@ -1611,4 +1702,51 @@ String? _paramOfHeader(String value, String name) {
     }
   }
   return null;
+}
+
+/// RFC 3261 §17 UDP client-transaction retransmitter.
+///
+/// Fires the first retransmit after T1 (500 ms), then doubles the interval
+/// (capped at T2=4 s for non-INVITE; uncapped for INVITE per Timer A).
+/// Timer B/F (64*T1 = 32 s) fires [onTimeout] if no response cancels us.
+class _Retransmitter {
+  static const _t1Ms = 500;
+  static const _t2Ms = 4000;
+  static const _timeoutMs = 32000; // 64 * T1
+
+  _Retransmitter({
+    required this.raw,
+    required this.sender,
+    required this.onTimeout,
+    required this.isInvite,
+  }) {
+    _arm(_t1Ms);
+    _timeoutTimer = Timer(
+      const Duration(milliseconds: _timeoutMs),
+      () { cancel(); onTimeout(); },
+    );
+  }
+
+  final String raw;
+  final void Function(String) sender;
+  final void Function() onTimeout;
+  final bool isInvite;
+
+  int _intervalMs = _t1Ms;
+  Timer? _retransmitTimer;
+  Timer? _timeoutTimer;
+
+  void _arm(int ms) {
+    _intervalMs = ms;
+    _retransmitTimer = Timer(Duration(milliseconds: ms), () {
+      sender(raw);
+      final next = _intervalMs * 2;
+      _arm(isInvite ? next : next.clamp(0, _t2Ms));
+    });
+  }
+
+  void cancel() {
+    _retransmitTimer?.cancel();
+    _timeoutTimer?.cancel();
+  }
 }
