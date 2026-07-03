@@ -371,7 +371,8 @@ class _DialerSheetState extends ConsumerState<_DialerSheet> {
       );
     }
     final ready = canCall && dialed.trim().isNotEmpty;
-    return Padding(
+    return SingleChildScrollView(
+      child: Padding(
       // BP `.dialCall` block sits in a 25 px gutter; we honour that with
       // a generous outer padding (more on the bottom so the action row
       // breathes against the sheet edge).
@@ -434,6 +435,7 @@ class _DialerSheetState extends ConsumerState<_DialerSheet> {
           ),
         ],
       ),
+    ),
     );
   }
 }

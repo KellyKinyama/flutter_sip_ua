@@ -195,59 +195,70 @@ class _CallPageState extends ConsumerState<CallPage>
   }
 
   Widget _buildContent(SipCall c, CallState state) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          CallTopBar(
-            outgoing: c.outgoing,
-            state: state,
-            recording: _recording,
-            onMinimise: () => Navigator.of(context).maybePop(),
-          ),
-          const SizedBox(height: 16),
-          CallPartyCard(
-            party: c.remoteParty,
-            state: state,
-            held: c.held,
-            elapsed: _elapsed,
-            pulse: _pulse,
-          ),
-          if (_dtmfHistory.isNotEmpty && state == CallState.active)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(
-                _dtmfHistory,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  letterSpacing: 4,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: IntrinsicHeight(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    CallTopBar(
+                      outgoing: c.outgoing,
+                      state: state,
+                      recording: _recording,
+                      onMinimise: () => Navigator.of(context).maybePop(),
+                    ),
+                    const SizedBox(height: 16),
+                    CallPartyCard(
+                      party: c.remoteParty,
+                      state: state,
+                      held: c.held,
+                      elapsed: _elapsed,
+                      pulse: _pulse,
+                    ),
+                    if (_dtmfHistory.isNotEmpty && state == CallState.active)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Text(
+                          _dtmfHistory,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            letterSpacing: 4,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                    if (_showStats && state == CallState.active)
+                      const CallStatsPanel(
+                        codec: 'PCMU',
+                        bitrateKbps: null,
+                        packetLossPct: null,
+                        jitterMs: null,
+                        rttMs: null,
+                      ),
+                    const Spacer(),
+                    if (_showKeypad && state == CallState.active) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: DialPad(compact: true, onKey: _sendDtmf),
+                      ),
+                      TextButton.icon(
+                        onPressed: _toggleKeypad,
+                        icon: const Icon(Icons.keyboard_arrow_down),
+                        label: const Text('Hide keypad'),
+                      ),
+                    ],
+                    _buildActions(c, state),
+                  ],
                 ),
               ),
             ),
-          if (_showStats && state == CallState.active)
-            const CallStatsPanel(
-              codec: 'PCMU',
-              bitrateKbps: null,
-              packetLossPct: null,
-              jitterMs: null,
-              rttMs: null,
-            ),
-          const Spacer(),
-          if (_showKeypad && state == CallState.active) ...[
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: DialPad(compact: true, onKey: _sendDtmf),
-            ),
-            TextButton.icon(
-              onPressed: _toggleKeypad,
-              icon: const Icon(Icons.keyboard_arrow_down),
-              label: const Text('Hide keypad'),
-            ),
-          ],
-          _buildActions(c, state),
-        ],
-      ),
+          ),
+        );
+      },
     );
   }
 
