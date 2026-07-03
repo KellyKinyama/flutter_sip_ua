@@ -57,7 +57,9 @@ class SipMessage {
       if (line.isEmpty) continue;
       final colon = line.indexOf(':');
       if (colon <= 0) continue;
-      final name = line.substring(0, colon).trim();
+      final rawName = line.substring(0, colon).trim();
+      // RFC 3261 §7.3.3 — expand compact header forms to canonical names.
+      final name = _compactForms[rawName] ?? rawName;
       var value = line.substring(colon + 1);
       if (value.isNotEmpty && (value[0] == ' ' || value[0] == '\t')) {
         value = value.substring(1);
@@ -243,6 +245,24 @@ Map<String, String> parseAuthHeader(String value) {
   }
   return out;
 }
+
+/// RFC 3261 §7.3.3 compact header form → canonical name.
+const _compactForms = <String, String>{
+  'i': 'Call-ID',
+  'f': 'From',
+  't': 'To',
+  'v': 'Via',
+  'm': 'Contact',
+  'c': 'Content-Type',
+  'l': 'Content-Length',
+  'e': 'Content-Encoding',
+  's': 'Subject',
+  // RFC 3515
+  'r': 'Refer-To',
+  // RFC 3265
+  'o': 'Event',
+  'u': 'Allow-Events',
+};
 
 /// Returns the URI from a name-addr or addr-spec header value (From, To,
 /// Contact). Strips display name and surrounding angle brackets and any

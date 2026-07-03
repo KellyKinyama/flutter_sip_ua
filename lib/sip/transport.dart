@@ -1,15 +1,15 @@
 /// SIP transports.
 ///
-/// Two pluggable implementations:
+/// Pluggable implementations:
 ///
-///  * [SipWebSocketTransport] — `ws://` / `wss://` to the dart-pbx WS server
-///    (Sec-WebSocket-Protocol: sip). Works on every platform Flutter
-///    supports, including web.
-///  * `SipUdpTransport`       — RFC 3261 §18 UDP, one datagram per message.
-///    Provided by `transport_udp_io.dart` on platforms that have
-///    `dart:io`; on web the factory throws [UnsupportedError].
+///  * [SipWebSocketTransport] — `ws://` / `wss://` (Sec-WebSocket-Protocol: sip).
+///    Works on every platform Flutter supports, including web.
+///  * `SipUdpTransport` — RFC 3261 §18 UDP, one datagram per message.
+///    Native only (`dart:io`); throws on web.
+///  * `SipTcpTransport` — RFC 3261 §18 TCP stream, Content-Length framed.
+///    Native only; `useTls: true` for SIPS / transport=tls.
 ///
-/// Both expose the same surface ([SipTransport]) so the user agent doesn't
+/// All expose the same [SipTransport] surface so the user agent doesn't
 /// care which one it talks over.
 library;
 
@@ -21,12 +21,13 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'sip_message.dart';
 
-// UDP transport lives in `transport_udp_io.dart` on native, where
-// `dart:io` is available. On web (no `dart:io`) the stub variant kicks in
-// and any attempt to construct a UDP transport throws.
 import 'transport_udp_stub.dart'
     if (dart.library.io) 'transport_udp_io.dart'
     as udp;
+
+import 'transport_tcp_stub.dart'
+    if (dart.library.io) 'transport_tcp_io.dart'
+    as tcp;
 
 enum TransportState { disconnected, connecting, connected }
 
@@ -54,20 +55,75 @@ abstract class SipTransport {
 
   /// Build the right transport for [serverUri].
   ///
-  ///   * ws://host:port  -> [SipWebSocketTransport]
-  ///   * wss://host:port -> [SipWebSocketTransport]
-  ///   * sip:host:port   -> UDP transport (native only — throws on web)
+  ///   * ws:// / wss://                    → WebSocket (cross-platform)
+  ///   * sips:host:port                    → TLS/TCP (native only)
+  ///   * sip:host:port;transport=tls       → TLS/TCP (native only)
+  ///   * sip:host:port;transport=tcp       → plain TCP (native only)
+  ///   * sip:host:port  (default / ;transport=udp) → UDP (native only)
   static SipTransport forUri(Uri serverUri) {
     final scheme = serverUri.scheme.toLowerCase();
+
     if (scheme == 'ws' || scheme == 'wss') {
       return SipWebSocketTransport(uri: serverUri);
     }
+
+    if (scheme == 'sips') {
+      final host = _sipHost(serverUri);
+      final port = _sipPort(serverUri, 5061);
+      return tcp.createTcpTransport(
+          remoteHost: host, remotePort: port, useTls: true);
+    }
+
     if (scheme == 'sip' || scheme.isEmpty) {
-      final host = serverUri.host.isEmpty ? serverUri.path : serverUri.host;
-      final port = serverUri.hasPort ? serverUri.port : 5060;
+      final host = _sipHost(serverUri);
+      final transport = _sipTransportParam(serverUri);
+      if (transport == 'tls') {
+        final port = _sipPort(serverUri, 5061);
+        return tcp.createTcpTransport(
+            remoteHost: host, remotePort: port, useTls: true);
+      }
+      if (transport == 'tcp') {
+        final port = _sipPort(serverUri, 5060);
+        return tcp.createTcpTransport(
+            remoteHost: host, remotePort: port, useTls: false);
+      }
+      final port = _sipPort(serverUri, 5060);
       return udp.createUdpTransport(remoteHost: host, remotePort: port);
     }
+
     throw UnsupportedError('Unsupported SIP transport scheme: $scheme');
+  }
+
+  // --- SIP URI helpers -------------------------------------------------------
+  // Dart parses `sip:host:port;params` as scheme=sip, path=host:port;params.
+  // These helpers extract the pieces from either form.
+
+  static String _sipHost(Uri uri) {
+    if (uri.host.isNotEmpty) return uri.host;
+    final base = uri.path.split(';').first;
+    final colon = base.lastIndexOf(':');
+    return colon < 0 ? base : base.substring(0, colon);
+  }
+
+  static int _sipPort(Uri uri, int fallback) {
+    if (uri.hasPort) return uri.port;
+    final base = uri.path.split(';').first;
+    final colon = base.lastIndexOf(':');
+    if (colon < 0) return fallback;
+    return int.tryParse(base.substring(colon + 1)) ?? fallback;
+  }
+
+  static String? _sipTransportParam(Uri uri) {
+    // Params appear after `;` in the path for authority-less SIP URIs.
+    final parts = uri.path.split(';');
+    for (final part in parts.skip(1)) {
+      final kv = part.split('=');
+      if (kv.length == 2 &&
+          kv[0].trim().toLowerCase() == 'transport') {
+        return kv[1].trim().toLowerCase();
+      }
+    }
+    return null;
   }
 }
 
